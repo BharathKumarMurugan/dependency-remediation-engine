@@ -101,17 +101,13 @@ export function extractSeverity(v: OSVVulnerability): string {
   return "UNKNOWN";
 }
 
-export function evaluateRemediation(
-  packageName: string,
-  currentVersion: string,
-  vulnerabilities: OSVVulnerability[]
-): RemediationReport {
+export function evaluateRemediation(packageName: string, currentVersion: string, vulnerabilities: OSVVulnerability[]): RemediationReport {
   if (!vulnerabilities || vulnerabilities.length === 0) {
     return {
       packageName,
       currentVersion,
       vulnerabilities: [],
-      remediation: { targetVersion: null, upgradeType: 'NONE', hasBreakingChanges: false },
+      remediation: { targetVersion: null, upgradeType: "NONE", hasBreakingChanges: false },
     };
   }
 
@@ -125,10 +121,7 @@ export function evaluateRemediation(
         range.events?.forEach((evt) => {
           if (evt.fixed) {
             vulnFixedVersion = evt.fixed;
-            if (
-              !highestFixedVersion ||
-              (semver.valid(evt.fixed) && semver.valid(highestFixedVersion) && semver.gt(evt.fixed, highestFixedVersion))
-            ) {
+            if (!highestFixedVersion || (semver.valid(evt.fixed) && semver.valid(highestFixedVersion) && semver.gt(evt.fixed, highestFixedVersion))) {
               highestFixedVersion = evt.fixed;
             }
           }
@@ -138,24 +131,24 @@ export function evaluateRemediation(
 
     return {
       id: v.id,
-      summary: v.summary || 'No summary provided',
+      summary: v.summary || "No summary provided",
       severity: extractSeverity(v),
       fixedInVersion: vulnFixedVersion,
     };
   });
 
-  let upgradeType: 'PATCH' | 'MINOR' | 'MAJOR' | 'NONE' = 'NONE';
+  let upgradeType: "PATCH" | "MINOR" | "MAJOR" | "NONE" = "NONE";
   let hasBreakingChanges = false;
 
   if (highestFixedVersion && semver.valid(highestFixedVersion) && semver.valid(currentVersion)) {
     const diff = semver.diff(currentVersion, highestFixedVersion);
-    if (diff === 'major' || diff === 'premajor') {
-      upgradeType = 'MAJOR';
+    if (diff === "major" || diff === "premajor") {
+      upgradeType = "MAJOR";
       hasBreakingChanges = true;
-    } else if (diff === 'minor' || diff === 'preminor') {
-      upgradeType = 'MINOR';
-    } else if (diff === 'patch' || diff === 'prepatch') {
-      upgradeType = 'PATCH';
+    } else if (diff === "minor" || diff === "preminor") {
+      upgradeType = "MINOR";
+    } else if (diff === "patch" || diff === "prepatch") {
+      upgradeType = "PATCH";
     }
   }
 

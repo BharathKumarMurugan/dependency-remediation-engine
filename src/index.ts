@@ -12,22 +12,20 @@ async function main() {
 
   const targetPath = process.argv[2] || path.join(process.cwd(), "package-lock.json");
   let resolvedPath = targetPath;
-  let projectRootDir = targetPath;
-
   try {
     const stat = await fs.stat(targetPath);
     if (stat.isDirectory()) {
       resolvedPath = path.join(targetPath, "package-lock.json");
-      projectRootDir = targetPath;
-    } else {
-      projectRootDir = path.dirname(targetPath);
     }
   } catch (err) {
+    // If path does not exist, let parsePackageLock handle the error
     console.error("Scan failed:", err);
     process.exit(1);
   }
+  const projectRootDir = path.dirname(targetPath);
 
   const spinner = intro.spinner();
+
   spinner.start("Scanning lockfile and querying OSV.dev Hydration API...");
   const queries = await parsePackageLock(resolvedPath);
   const vulnMap = await fetchBatchVulnerabilities(queries);
@@ -46,14 +44,16 @@ async function main() {
     return;
   }
 
+  // Human-in-loop interactive loop
   for (const pkg of vulnerableItems) {
     const { packageName, currentVersion, remediation } = pkg;
+
     intro.note(
       `Package: ${packageName}\n` +
-      `Current Installed Version: ${currentVersion}\n` +
-      `Target Safe Version: ${remediation.targetVersion || "N/A"}\n` +
-      `Upgrade Path Severity: ${remediation.upgradeType} (Breaking Change: ${remediation.hasBreakingChanges})`,
-      `⚠️ Vulnerability Found: ${pkg.vulnerabilities[0].id}`
+        `Current Installed Version: ${currentVersion}\n` +
+        `Target Safe Version: ${remediation.targetVersion || "N/A"}\n` +
+        `Upgrade Path Severity: ${remediation.upgradeType} (Breaking Change: ${remediation.hasBreakingChanges})`,
+      `⚠️ Vulnerability Found: ${pkg.vulnerabilities[0].id}`,
     );
 
     const shouldUpgrade = await intro.confirm({
@@ -64,8 +64,10 @@ async function main() {
       continue;
     }
 
+    // Checking if codemods are needed for breaking upgrades
     if (remediation.hasBreakingChanges) {
       const rules = getRulesForPackage(packageName);
+
       if (rules) {
         const confirmCodemod = await intro.confirm({
           message: `🚨 This is a MAJOR upgrade containing breaking structural shifts. Run automated AST Refactoring Engine?`,

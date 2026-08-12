@@ -10,7 +10,7 @@ export interface DatabaseSpecific {
   github_reviewed_at?: string;
   github_reviewed?: boolean;
   nvd_published_at?: string;
-  severity?: 'LOW' | 'MODERATE' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | string;
+  severity?: "LOW" | "MODERATE" | "MEDIUM" | "HIGH" | "CRITICAL" | string;
   cwe_ids?: string[];
   source?: string;
   [key: string]: unknown;
