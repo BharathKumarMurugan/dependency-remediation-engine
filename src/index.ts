@@ -7,30 +7,51 @@ import { evaluateRemediation } from "./evaulator";
 import { getRulesForPackage } from "./codemod/registry";
 import { applyStructuralCodemod } from "./codemod/astGrepRunner";
 import { GitGuard } from "./vcs/gitGuard";
-import { installUpgrade, verifyTestSuite } from "./runner/packageManager";
+import {
+  detectPackageManager,
+  installUpgrade,
+  PackageManagerType,
+  verifyTestSuite,
+} from "./runner/packageManager";
 
 async function main() {
   intro.intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");
 
-  const targetPath = process.argv[2] || path.join(process.cwd(), "package-lock.json");
-  let resolvedPath = targetPath;
+  const targetPath = process.argv[2] || process.cwd();
+  let projectRootDir = targetPath;
   try {
     const stat = await fs.stat(targetPath);
-    if (stat.isDirectory()) {
-      resolvedPath = path.join(targetPath, "package-lock.json");
+    if (!stat.isDirectory()) {
+      projectRootDir = path.dirname(targetPath);
     }
   } catch (err) {
-    // If path does not exist, let parsePackageLock handle the error
-    console.error("Scan failed:", err);
+    console.error("Scan failed: Target path not found:", targetPath);
     process.exit(1);
   }
-  
-  const projectRootDir = path.dirname(resolvedPath);
+
+  // 1. Detect Package Manager and ask user at the first step
+  const detectedPm = await detectPackageManager(projectRootDir);
+
+  const chosenPm = await intro.select<PackageManagerType>({
+    message: `Select the Node package manager to use (auto-detected: ${detectedPm}):`,
+    options: [
+      { value: "npm", label: "npm", hint: detectedPm === "npm" ? "auto-detected" : undefined },
+      { value: "pnpm", label: "pnpm", hint: detectedPm === "pnpm" ? "auto-detected" : undefined },
+      { value: "yarn", label: "yarn", hint: detectedPm === "yarn" ? "auto-detected" : undefined },
+      { value: "bun", label: "bun", hint: detectedPm === "bun" ? "auto-detected" : undefined },
+    ],
+    initialValue: detectedPm,
+  });
+
+  if (intro.isCancel(chosenPm)) {
+    intro.outro("Operation cancelled.");
+    process.exit(0);
+  }
+
+  intro.log.info(`Active package manager selected: ${chosenPm}`);
+
   const gitGuard = new GitGuard(projectRootDir);
   const spinner = intro.spinner();
-  console.log("targetPath: ", targetPath);
-  console.log("resolvedPath: ", resolvedPath);
-  console.log("projectRootDir: ", projectRootDir);
 
   // Safety Gate Check
   const isClean = await gitGuard.isWorkingTreeClean();
@@ -39,8 +60,8 @@ async function main() {
     process.exit(1);
   }
 
-  spinner.start("Scanning lockfile and querying OSV.dev Hydration API...");
-  const queries = await parsePackageLock(resolvedPath);
+  spinner.start(`Scanning dependencies using ${chosenPm} lockfile parser and querying OSV.dev API...`);
+  const queries = await parsePackageLock(projectRootDir, chosenPm);
   const vulnMap = await fetchBatchVulnerabilities(queries);
 
   const reports = queries.map((q) => {
@@ -98,17 +119,21 @@ async function main() {
         }
       }
 
-      // 2. Physical package upgrade execution
-      spinner.start(`Installing upgraded dependency: ${packageName}@${remediation.targetVersion}...`);
-      await installUpgrade(projectRootDir, {
-        packageName,
-        targetVersion: remediation.targetVersion,
-      });
-      spinner.stop(`Package installed successfully.`);
+      // 2. Physical package upgrade execution using selected package manager
+      spinner.start(`Installing upgraded dependency via ${chosenPm}: ${packageName}@${remediation.targetVersion}...`);
+      await installUpgrade(
+        projectRootDir,
+        {
+          packageName,
+          targetVersion: remediation.targetVersion,
+        },
+        chosenPm
+      );
+      spinner.stop(`Package installed successfully via ${chosenPm}.`);
 
-      // 3. Automated Test Verification Gate
-      spinner.start(`Executing verification test suites ('npm test')...`);
-      const testsPassed = await verifyTestSuite(projectRootDir);
+      // 3. Automated Test Verification Gate using selected package manager
+      spinner.start(`Executing verification test suite ('${chosenPm} test')...`);
+      const testsPassed = await verifyTestSuite(projectRootDir, chosenPm);
 
       if (testsPassed) {
         spinner.stop(`Verification testing passed! Remediations successfully integrated.`);
