@@ -77,26 +77,70 @@ async function main() {
     intro.outro("🎉 Your dependencies are secure. No actions needed!");
     return;
   }
+
+  // Display summary table of all vulnerable packages found
+  const summaryTable = vulnerableItems.map((item) => ({
+    "Package Name": item.packageName,
+    "Current Version": item.currentVersion,
+    "Target Safe Version": item.remediation.targetVersion || "N/A",
+    "Upgrade Severity": item.remediation.upgradeType,
+    "Breaking Changes": item.remediation.hasBreakingChanges ? "Yes" : "No",
+  }));
+
+  console.log("\n📋 Summary of Vulnerable Packages Identified:");
+  console.table(summaryTable);
+  console.log("");
+
   // Create safety rollback snapshot baseline
   await gitGuard.createSnapshot();
 
+  let autoApproveAll = false;
+  let autoApproveCodemod = false;
+
   // Human-in-loop interactive loop
-  for (const pkg of vulnerableItems) {
+  for (let i = 0; i < vulnerableItems.length; i++) {
+    const pkg = vulnerableItems[i];
     const { packageName, currentVersion, remediation } = pkg;
 
-    intro.note(
-      `Package: ${packageName}\n` +
-        `Current Installed Version: ${currentVersion}\n` +
-        `Target Safe Version: ${remediation.targetVersion || "N/A"}\n` +
-        `Upgrade Path Severity: ${remediation.upgradeType} (Breaking Change: ${remediation.hasBreakingChanges})`,
-      `⚠️ Vulnerability Found: ${pkg.vulnerabilities[0].id}`,
-    );
+    let shouldUpgrade = false;
 
-    const shouldUpgrade = await intro.confirm({
-      message: `Do you want to prepare the upgrade remediation for ${packageName}?`,
-    });
+    if (autoApproveAll) {
+      shouldUpgrade = true;
+      intro.log.info(`[${i + 1}/${vulnerableItems.length}] Auto-preparing upgrade for ${packageName}...`);
+    } else {
+      intro.note(
+        `Package: ${packageName}\n` +
+          `Current Installed Version: ${currentVersion}\n` +
+          `Target Safe Version: ${remediation.targetVersion || "N/A"}\n` +
+          `Upgrade Path Severity: ${remediation.upgradeType} (Breaking Change: ${remediation.hasBreakingChanges})`,
+        `⚠️ Vulnerability Found [${i + 1}/${vulnerableItems.length}]: ${pkg.vulnerabilities[0]?.id || packageName}`,
+      );
 
-    if (intro.isCancel(shouldUpgrade) || !shouldUpgrade) {
+      const choice = await intro.select({
+        message: `Do you want to prepare the upgrade remediation for ${packageName}? (${i + 1}/${vulnerableItems.length})`,
+        options: [
+          { value: "yes", label: "Yes", hint: "Upgrade this package" },
+          { value: "yes-all", label: "Yes to All", hint: "Automatically upgrade all remaining packages" },
+          { value: "no", label: "No", hint: "Skip this package" },
+        ],
+      });
+
+      if (intro.isCancel(choice)) {
+        intro.outro("Operation cancelled.");
+        process.exit(0);
+      }
+
+      if (choice === "yes-all") {
+        autoApproveAll = true;
+        shouldUpgrade = true;
+      } else if (choice === "yes") {
+        shouldUpgrade = true;
+      } else {
+        shouldUpgrade = false;
+      }
+    }
+
+    if (!shouldUpgrade) {
       continue;
     }
 
@@ -105,11 +149,31 @@ async function main() {
       if (remediation.hasBreakingChanges) {
         const rules = getRulesForPackage(packageName);
         if (rules) {
-          const confirmCodemod = await intro.confirm({
-            message: `🚨 This is a MAJOR upgrade containing breaking structural shifts. Run automated AST Refactoring Engine?`,
-          });
+          let runCodemod = autoApproveCodemod || autoApproveAll;
+          if (!runCodemod) {
+            const confirmCodemod = await intro.select({
+              message: `🚨 ${packageName} has MAJOR breaking structural shifts. Run automated AST Refactoring Engine?`,
+              options: [
+                { value: "yes", label: "Yes", hint: "Run AST refactoring for this package" },
+                { value: "yes-all", label: "Yes to All", hint: "Run AST refactoring for all breaking packages" },
+                { value: "no", label: "No", hint: "Skip AST refactoring" },
+              ],
+            });
 
-          if (confirmCodemod && !intro.isCancel(confirmCodemod)) {
+            if (intro.isCancel(confirmCodemod)) {
+              intro.outro("Operation cancelled.");
+              process.exit(0);
+            }
+
+            if (confirmCodemod === "yes-all") {
+              autoApproveCodemod = true;
+              runCodemod = true;
+            } else if (confirmCodemod === "yes") {
+              runCodemod = true;
+            }
+          }
+
+          if (runCodemod) {
             spinner.start(`Running ast-grep refactoring on source files...`);
             const count = await applyStructuralCodemod(projectRootDir, rules);
             spinner.stop(`AST refactoring complete. Modified structural elements in ${count} files.`);
