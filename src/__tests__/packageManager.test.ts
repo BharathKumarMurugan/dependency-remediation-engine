@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { detectPackageManager, isDirectDependency } from "../runner/packageManager";
+import { detectPackageManager, hasTestSuite, isDirectDependency } from "../runner/packageManager";
 
 describe("packageManager", () => {
   let tmpDir: string;
@@ -55,5 +55,25 @@ describe("packageManager", () => {
     await fs.writeFile(path.join(npmDir, "package-lock.json"), "{}");
     expect(await detectPackageManager(npmDir)).toBe("npm");
     await fs.rm(npmDir, { recursive: true, force: true });
+  });
+
+  it("should correctly detect presence or absence of a valid test suite", async () => {
+    const noTestDir = await fs.mkdtemp(path.join(os.tmpdir(), "notest-"));
+    await fs.writeFile(
+      path.join(noTestDir, "package.json"),
+      JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }),
+      "utf-8"
+    );
+    expect(await hasTestSuite(noTestDir)).toBe(false);
+    await fs.rm(noTestDir, { recursive: true, force: true });
+
+    const validTestDir = await fs.mkdtemp(path.join(os.tmpdir(), "validtest-"));
+    await fs.writeFile(
+      path.join(validTestDir, "package.json"),
+      JSON.stringify({ scripts: { test: "jest" } }),
+      "utf-8"
+    );
+    expect(await hasTestSuite(validTestDir)).toBe(true);
+    await fs.rm(validTestDir, { recursive: true, force: true });
   });
 });

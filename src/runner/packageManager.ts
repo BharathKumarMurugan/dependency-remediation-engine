@@ -110,13 +110,50 @@ export async function installUpgrade(
 }
 
 /**
+ * Checks if the target repository has a valid, configured test suite script in package.json
+ */
+export async function hasTestSuite(projectDir: string): Promise<boolean> {
+  try {
+    const pkgPath = path.join(projectDir, 'package.json');
+    const content = await fs.readFile(pkgPath, 'utf-8');
+    const pkg = JSON.parse(content);
+
+    const testScript = pkg.scripts?.test;
+    if (!testScript || typeof testScript !== 'string') return false;
+
+    const normalized = testScript.trim().toLowerCase();
+
+    // Check for standard unconfigured default npm test script
+    if (
+      normalized.includes('no test specified') ||
+      normalized === 'exit 0' ||
+      normalized === 'exit 1' ||
+      normalized.startsWith('echo "error:') ||
+      normalized.startsWith("echo 'error:")
+    ) {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Runs the project's verification test runner suite using the chosen package manager.
  * Returns true if passes successfully, false if suite breaks or fails.
+ * If no test suite is configured in the repository, skips execution and returns true.
  */
 export async function verifyTestSuite(
   projectDir: string,
   pm: PackageManagerType = 'npm'
 ): Promise<boolean> {
+  const hasTests = await hasTestSuite(projectDir);
+  if (!hasTests) {
+    return true;
+  }
+
   const config = PACKAGE_MANAGERS[pm] || PACKAGE_MANAGERS.npm;
   try {
     await execAsync(config.testCmd, { cwd: projectDir });

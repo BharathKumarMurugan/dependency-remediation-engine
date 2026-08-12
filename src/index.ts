@@ -7,12 +7,7 @@ import { evaluateRemediation } from "./evaulator";
 import { getRulesForPackage } from "./codemod/registry";
 import { applyStructuralCodemod } from "./codemod/astGrepRunner";
 import { GitGuard } from "./vcs/gitGuard";
-import {
-  detectPackageManager,
-  installUpgrade,
-  PackageManagerType,
-  verifyTestSuite,
-} from "./runner/packageManager";
+import { detectPackageManager, hasTestSuite, installUpgrade, PackageManagerType, verifyTestSuite } from "./runner/packageManager";
 
 async function main() {
   intro.intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");
@@ -81,6 +76,7 @@ async function main() {
   // Display summary table of all vulnerable packages found
   const summaryTable = vulnerableItems.map((item) => ({
     "Package Name": item.packageName,
+    ID: item.vulnerabilities[0].id || item.packageName,
     "Current Version": item.currentVersion,
     "Target Safe Version": item.remediation.targetVersion || "N/A",
     "Upgrade Severity": item.remediation.upgradeType,
@@ -191,23 +187,30 @@ async function main() {
           packageName,
           targetVersion: remediation.targetVersion,
         },
-        chosenPm
+        chosenPm,
       );
       spinner.stop(`Package installed successfully via ${chosenPm}.`);
 
       // 3. Automated Test Verification Gate using selected package manager
-      spinner.start(`Executing verification test suite ('${chosenPm} test')...`);
-      const testsPassed = await verifyTestSuite(projectRootDir, chosenPm);
+      const testSuiteConfigured = await hasTestSuite(projectRootDir);
 
-      if (testsPassed) {
-        spinner.stop(`Verification testing passed! Remediations successfully integrated.`);
-        intro.log.success(`✨ Package ${packageName} successfully updated and verified.`);
+      if (!testSuiteConfigured) {
+        intro.log.warn(`⚠️ No test suite configured in target repository. Skipping test verification for ${packageName}.`);
+        intro.log.success(`✨ Package ${packageName} successfully updated.`);
       } else {
-        spinner.stop(`Verification test suite FAILED.`);
-        intro.log.error(`🚨 Post-upgrade test verification suite encountered errors. Triggering automated rollback transaction...`);
+        spinner.start(`Executing verification test suite ('${chosenPm} test')...`);
+        const testsPassed = await verifyTestSuite(projectRootDir, chosenPm);
 
-        await gitGuard.rollback();
-        intro.log.warn(`↩️ Rollback complete. Filesystem reverted back to safe initialization state.`);
+        if (testsPassed) {
+          spinner.stop(`Verification testing passed! Remediations successfully integrated.`);
+          intro.log.success(`✨ Package ${packageName} successfully updated and verified.`);
+        } else {
+          spinner.stop(`Verification test suite FAILED.`);
+          intro.log.error(`🚨 Post-upgrade test verification suite encountered errors. Triggering automated rollback transaction...`);
+
+          await gitGuard.rollback();
+          intro.log.warn(`↩️ Rollback complete. Filesystem reverted back to safe initialization state.`);
+        }
       }
     } catch (pipelineError: any) {
       spinner.stop(`Pipeline execution broken.`);
