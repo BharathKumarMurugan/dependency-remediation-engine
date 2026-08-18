@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { detectPackageManager, hasTestSuite, isDirectDependency } from "../runner/packageManager";
+import { detectPackageManager, hasTestSuite, isDirectDependency, isNoTargetVersionError } from "../runner/packageManager";
 
 describe("packageManager", () => {
   let tmpDir: string;
@@ -75,5 +75,12 @@ describe("packageManager", () => {
     );
     expect(await hasTestSuite(validTestDir)).toBe(true);
     await fs.rm(validTestDir, { recursive: true, force: true });
+  });
+
+  it("should identify no matching target version errors correctly", () => {
+    expect(isNoTargetVersionError("npm error code ETARGET")).toBe(true);
+    expect(isNoTargetVersionError("npm error notarget No matching version found for foo@9.9.9")).toBe(true);
+    expect(isNoTargetVersionError("ERR_PNPM_NO_MATCHING_VERSION No matching version found for bar")).toBe(true);
+    expect(isNoTargetVersionError("SyntaxError: unexpected token")).toBe(false);
   });
 });

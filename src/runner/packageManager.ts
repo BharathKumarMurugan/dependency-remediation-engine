@@ -85,6 +85,27 @@ export async function isDirectDependency(projectDir: string, packageName: string
   }
 }
 
+export class NoTargetVersionError extends Error {
+  constructor(packageName: string, targetVersion: string, originalMessage: string) {
+    super(`No matching version "${targetVersion}" found for package "${packageName}": ${originalMessage}`);
+    this.name = 'NoTargetVersionError';
+  }
+}
+
+export function isNoTargetVersionError(errorMessage: string): boolean {
+  const msg = errorMessage.toLowerCase();
+  return (
+    msg.includes('notarget') ||
+    msg.includes('etarget') ||
+    msg.includes('no matching version') ||
+    msg.includes("couldn't find any versions") ||
+    msg.includes('could not find any versions') ||
+    msg.includes('versionnotfound') ||
+    msg.includes('packagenotfound') ||
+    msg.includes('no versions available')
+  );
+}
+
 /**
  * Executes installation upgrade for a package using the chosen package manager.
  * Updates package.json ONLY for direct dependencies, and lockfile ONLY for transitive dependencies.
@@ -105,7 +126,11 @@ export async function installUpgrade(
   try {
     await execAsync(command, { cwd: projectDir });
   } catch (error: any) {
-    throw new Error(`Installation failed for ${target.packageName} using ${pm}: ${error.message}`);
+    const errorMsg = error.message || '';
+    if (isNoTargetVersionError(errorMsg)) {
+      throw new NoTargetVersionError(target.packageName, target.targetVersion, errorMsg);
+    }
+    throw new Error(`Installation failed for ${target.packageName} using ${pm}: ${errorMsg}`);
   }
 }
 

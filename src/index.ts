@@ -11,6 +11,8 @@ import {
   detectPackageManager,
   hasTestSuite,
   installUpgrade,
+  isNoTargetVersionError,
+  NoTargetVersionError,
   PackageManagerType,
   verifyTestSuite,
 } from "./runner/packageManager";
@@ -98,9 +100,6 @@ async function main() {
   console.table(summaryTable);
   console.log("");
 
-  // Create safety rollback snapshot baseline
-  await gitGuard.createSnapshot();
-
   let autoApproveAll = false;
   let autoApproveCodemod = false;
 
@@ -165,6 +164,9 @@ async function main() {
       continue;
     }
 
+    // Create per-package snapshot before modifying filesystem for this package
+    await gitGuard.createSnapshot(packageName);
+
     try {
       // 1. Checking if codemods are needed for breaking upgrades
       if (remediation.hasBreakingChanges) {
@@ -222,6 +224,7 @@ async function main() {
       if (!testSuiteConfigured) {
         intro.log.warn(`⚠️ No test suite configured in target repository. Skipping test verification for ${packageName}.`);
         intro.log.success(`✨ Package ${packageName} successfully updated.`);
+        await gitGuard.commitSnapshot();
       } else {
         spinner.start(`Executing verification test suite ('${chosenPm} test')...`);
         const testsPassed = await verifyTestSuite(projectRootDir, chosenPm);
@@ -229,18 +232,26 @@ async function main() {
         if (testsPassed) {
           spinner.stop(`Verification testing passed! Remediations successfully integrated.`);
           intro.log.success(`✨ Package ${packageName} successfully updated and verified.`);
+          await gitGuard.commitSnapshot();
         } else {
           spinner.stop(`Verification test suite FAILED.`);
           intro.log.error(`🚨 Post-upgrade test verification suite encountered errors. Triggering automated rollback transaction...`);
 
           await gitGuard.rollback();
-          intro.log.warn(`↩️ Rollback complete. Filesystem reverted back to safe initialization state.`);
+          intro.log.warn(`↩️ Rollback complete for ${packageName}. Filesystem reverted back to pre-upgrade state.`);
         }
       }
     } catch (pipelineError: any) {
-      spinner.stop(`Pipeline execution broken.`);
-      intro.log.error(`Execution Error: ${pipelineError.message}. Triggering absolute rollback reset...`);
-      await gitGuard.rollback();
+      spinner.stop(`Step skipped for ${packageName}.`);
+      if (pipelineError instanceof NoTargetVersionError || isNoTargetVersionError(pipelineError.message || "")) {
+        intro.log.warn(
+          `⚠️ Skipped upgrade for "${packageName}": Target version ${remediation.targetVersion} was not found on the ${chosenPm} registry (no matching version found).`
+        );
+        await gitGuard.rollback();
+      } else {
+        intro.log.error(`Execution Error for ${packageName}: ${pipelineError.message}. Reverting package changes...`);
+        await gitGuard.rollback();
+      }
     }
   }
 
