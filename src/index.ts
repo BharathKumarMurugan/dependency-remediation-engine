@@ -3,11 +3,17 @@ import path from "path";
 import * as intro from "@clack/prompts";
 import { parsePackageLock } from "./parser";
 import { fetchBatchVulnerabilities } from "./osvClient";
-import { evaluateRemediation } from "./evaulator";
+import { checkPackageDeprecation, evaluateRemediation } from "./evaulator";
 import { getRulesForPackage } from "./codemod/registry";
 import { applyStructuralCodemod } from "./codemod/astGrepRunner";
 import { GitGuard } from "./vcs/gitGuard";
-import { detectPackageManager, hasTestSuite, installUpgrade, PackageManagerType, verifyTestSuite } from "./runner/packageManager";
+import {
+  detectPackageManager,
+  hasTestSuite,
+  installUpgrade,
+  PackageManagerType,
+  verifyTestSuite,
+} from "./runner/packageManager";
 
 async function main() {
   intro.intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");
@@ -59,31 +65,36 @@ async function main() {
   const queries = await parsePackageLock(projectRootDir, chosenPm);
   const vulnMap = await fetchBatchVulnerabilities(queries);
 
-  const reports = queries.map((q) => {
-    const key = `${q.package.name}@${q.version}`;
-    const vulns = vulnMap[key] || [];
-    return evaluateRemediation(q.package.name, q.version, vulns);
-  });
+  const reports = await Promise.all(
+    queries.map(async (q) => {
+      const key = `${q.package.name}@${q.version}`;
+      const vulns = vulnMap[key] || [];
+      const deprecationInfo = await checkPackageDeprecation(q.package.name, q.version, vulns);
+      return evaluateRemediation(q.package.name, q.version, vulns, deprecationInfo);
+    })
+  );
 
-  const vulnerableItems = reports.filter((r) => r.vulnerabilities.length > 0);
-  spinner.stop(`Scan completed. Found ${vulnerableItems.length} vulnerable packages.`);
+  const vulnerableItems = reports.filter((r) => r.vulnerabilities.length > 0 || r.isDeprecated);
+  spinner.stop(`Scan completed. Found ${vulnerableItems.length} vulnerable/deprecated packages.`);
 
   if (vulnerableItems.length === 0) {
     intro.outro("🎉 Your dependencies are secure. No actions needed!");
     return;
   }
 
-  // Display summary table of all vulnerable packages found
+  // Display summary table of all vulnerable or deprecated packages found
   const summaryTable = vulnerableItems.map((item) => ({
     "Package Name": item.packageName,
-    ID: item.vulnerabilities[0].id || item.packageName,
     "Current Version": item.currentVersion,
     "Target Safe Version": item.remediation.targetVersion || "N/A",
     "Upgrade Severity": item.remediation.upgradeType,
     "Breaking Changes": item.remediation.hasBreakingChanges ? "Yes" : "No",
+    "Status / Deprecated": item.isDeprecated
+      ? `DEPRECATED (${item.deprecationReason || "No longer supported"})`
+      : "Active",
   }));
 
-  console.log("\n📋 Summary of Vulnerable Packages Identified:");
+  console.log("\n📋 Summary of Vulnerable & Deprecated Packages Identified:");
   console.table(summaryTable);
   console.log("");
 
@@ -96,7 +107,21 @@ async function main() {
   // Human-in-loop interactive loop
   for (let i = 0; i < vulnerableItems.length; i++) {
     const pkg = vulnerableItems[i];
-    const { packageName, currentVersion, remediation } = pkg;
+    const { packageName, currentVersion, remediation, isDeprecated, deprecationReason } = pkg;
+
+    // Handle deprecated package logic: skip ONLY if no target safe version exists
+    if (isDeprecated) {
+      if (!remediation.targetVersion) {
+        intro.log.warn(
+          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}) and has no safe target version available. Skipping installation.`
+        );
+        continue;
+      } else {
+        intro.log.warn(
+          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}), but safe target version ${remediation.targetVersion} is available. Proceeding with upgrade...`
+        );
+      }
+    }
 
     let shouldUpgrade = false;
 
@@ -187,7 +212,7 @@ async function main() {
           packageName,
           targetVersion: remediation.targetVersion,
         },
-        chosenPm,
+        chosenPm
       );
       spinner.stop(`Package installed successfully via ${chosenPm}.`);
 

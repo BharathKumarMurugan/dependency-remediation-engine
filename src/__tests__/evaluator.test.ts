@@ -1,4 +1,4 @@
-import { evaluateRemediation } from "../evaulator";
+import { checkPackageDeprecation, evaluateRemediation } from "../evaulator";
 import { OSVVulnerability } from "../types";
 
 describe("evaluateRemediation", () => {
@@ -92,5 +92,21 @@ describe("evaluateRemediation", () => {
 
     const result = evaluateRemediation("connect", "2.8.0", mockVulns);
     expect(result.vulnerabilities[0].severity).toBe("MODERATE");
+  });
+
+  it("should detect deprecation from vulnerability details or deprecationInfo", async () => {
+    const mockVulns: OSVVulnerability[] = [
+      {
+        id: "GHSA-depr-1234",
+        summary: "This package is deprecated",
+        affected: [],
+      },
+    ];
+
+    const depInfo = await checkPackageDeprecation("some-deprecated-pkg", "1.0.0", mockVulns);
+    expect(depInfo.isDeprecated).toBe(true);
+
+    const result = evaluateRemediation("some-deprecated-pkg", "1.0.0", mockVulns, depInfo);
+    expect(result.isDeprecated).toBe(true);
   });
 });

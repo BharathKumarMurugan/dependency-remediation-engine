@@ -1,5 +1,72 @@
+import axios from "axios";
 import semver from "semver";
 import { OSVVulnerability, RemediationReport, VulnerabilitySummary } from "./types";
+
+export interface DeprecationInfo {
+  isDeprecated: boolean;
+  reason?: string;
+}
+
+export async function checkPackageDeprecation(
+  packageName: string,
+  currentVersion?: string,
+  vulnerabilities: OSVVulnerability[] = []
+): Promise<DeprecationInfo> {
+  for (const v of vulnerabilities) {
+    if (v.database_specific?.deprecated) {
+      return {
+        isDeprecated: true,
+        reason: String(v.database_specific.deprecated),
+      };
+    }
+    const summary = (v.summary || "").toLowerCase();
+    const details = (v.details || "").toLowerCase();
+
+    if (
+      summary.includes("deprecated") ||
+      details.includes("package is deprecated") ||
+      details.includes("package has been deprecated") ||
+      details.includes("is no longer maintained")
+    ) {
+      return {
+        isDeprecated: true,
+        reason: v.summary || "Package marked as deprecated in vulnerability advisories",
+      };
+    }
+  }
+
+  try {
+    const url = `https://registry.npmjs.org/${encodeURIComponent(packageName)}`;
+    const response = await axios.get(url, { timeout: 3000 });
+    const data = response.data;
+
+    if (data.deprecated) {
+      return {
+        isDeprecated: true,
+        reason: typeof data.deprecated === "string" ? data.deprecated : "Package is deprecated on npm registry",
+      };
+    }
+
+    const latestVer = data["dist-tags"]?.latest;
+    if (latestVer && data.versions?.[latestVer]?.deprecated) {
+      return {
+        isDeprecated: true,
+        reason: String(data.versions[latestVer].deprecated),
+      };
+    }
+
+    if (currentVersion && data.versions?.[currentVersion]?.deprecated) {
+      return {
+        isDeprecated: true,
+        reason: String(data.versions[currentVersion].deprecated),
+      };
+    }
+  } catch {
+    // If registry query fails or times out, fallback gracefully
+  }
+
+  return { isDeprecated: false };
+}
 
 export function parseCvssVectorToRating(vector: string): string | null {
   if (!vector.startsWith("CVSS:3.")) return null;
@@ -101,12 +168,22 @@ export function extractSeverity(v: OSVVulnerability): string {
   return "UNKNOWN";
 }
 
-export function evaluateRemediation(packageName: string, currentVersion: string, vulnerabilities: OSVVulnerability[]): RemediationReport {
+export function evaluateRemediation(
+  packageName: string,
+  currentVersion: string,
+  vulnerabilities: OSVVulnerability[],
+  deprecationInfo?: DeprecationInfo
+): RemediationReport {
+  const isDeprecated = deprecationInfo?.isDeprecated || false;
+  const deprecationReason = deprecationInfo?.reason;
+
   if (!vulnerabilities || vulnerabilities.length === 0) {
     return {
       packageName,
       currentVersion,
       vulnerabilities: [],
+      isDeprecated,
+      deprecationReason,
       remediation: { targetVersion: null, upgradeType: "NONE", hasBreakingChanges: false },
     };
   }
@@ -156,6 +233,8 @@ export function evaluateRemediation(packageName: string, currentVersion: string,
     packageName,
     currentVersion,
     vulnerabilities: vulnSummaries,
+    isDeprecated,
+    deprecationReason,
     remediation: {
       targetVersion: highestFixedVersion,
       upgradeType,
