@@ -76,22 +76,24 @@ async function main() {
     })
   );
 
-  const vulnerableItems = reports.filter((r) => r.vulnerabilities.length > 0 || r.isDeprecated);
-  spinner.stop(`Scan completed. Found ${vulnerableItems.length} vulnerable/deprecated packages.`);
+  const vulnerableItems = reports.filter((r) => r.vulnerabilities.length > 0 || r.isDeprecated || r.isPrivate);
+  spinner.stop(`Scan completed. Found ${vulnerableItems.length} vulnerable/deprecated/private packages.`);
 
   if (vulnerableItems.length === 0) {
     intro.outro("🎉 Your dependencies are secure. No actions needed!");
     return;
   }
 
-  // Display summary table of all vulnerable or deprecated packages found
+  // Display summary table of all vulnerable, deprecated, or private packages found
   const summaryTable = vulnerableItems.map((item) => ({
     "Package Name": item.packageName,
     "Current Version": item.currentVersion,
     "Target Safe Version": item.remediation.targetVersion || "N/A",
     "Upgrade Severity": item.remediation.upgradeType,
     "Breaking Changes": item.remediation.hasBreakingChanges ? "Yes" : "No",
-    "Status / Deprecated": item.isDeprecated
+    "Status / Deprecated": item.isPrivate
+      ? "PRIVATE (Not in npm registry)"
+      : item.isDeprecated
       ? `DEPRECATED (${item.deprecationReason || "No longer supported"})`
       : "Active",
   }));
@@ -106,7 +108,15 @@ async function main() {
   // Human-in-loop interactive loop
   for (let i = 0; i < vulnerableItems.length; i++) {
     const pkg = vulnerableItems[i];
-    const { packageName, currentVersion, remediation, isDeprecated, deprecationReason } = pkg;
+    const { packageName, currentVersion, remediation, isDeprecated, deprecationReason, isPrivate } = pkg;
+
+    // Skip installation if package is private / internal (not found in public npm registry)
+    if (isPrivate) {
+      intro.log.warn(
+        `⚠️ Package "${packageName}" is a private/internal package (not found in public npm registry). Skipping installation.`
+      );
+      continue;
+    }
 
     // Handle deprecated package logic: skip ONLY if no target safe version exists
     if (isDeprecated) {

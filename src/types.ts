@@ -48,6 +48,7 @@ export interface RemediationReport {
   vulnerabilities: VulnerabilitySummary[];
   isDeprecated?: boolean;
   deprecationReason?: string;
+  isPrivate?: boolean;
   remediation: {
     targetVersion: string | null;
     upgradeType: "PATCH" | "MINOR" | "MAJOR" | "NONE";

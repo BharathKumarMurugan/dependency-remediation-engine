@@ -109,4 +109,12 @@ describe("evaluateRemediation", () => {
     const result = evaluateRemediation("some-deprecated-pkg", "1.0.0", mockVulns, depInfo);
     expect(result.isDeprecated).toBe(true);
   });
+
+  it("should flag private packages not found in public npm registry", async () => {
+    const depInfo = await checkPackageDeprecation("@private-scope/non-existent-pkg-12345", "1.0.0", []);
+    expect(depInfo.isPrivate).toBe(true);
+
+    const result = evaluateRemediation("@private-scope/non-existent-pkg-12345", "1.0.0", [], depInfo);
+    expect(result.isPrivate).toBe(true);
+  });
 });

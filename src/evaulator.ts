@@ -5,6 +5,7 @@ import { OSVVulnerability, RemediationReport, VulnerabilitySummary } from "./typ
 export interface DeprecationInfo {
   isDeprecated: boolean;
   reason?: string;
+  isPrivate?: boolean;
 }
 
 export async function checkPackageDeprecation(
@@ -17,6 +18,7 @@ export async function checkPackageDeprecation(
       return {
         isDeprecated: true,
         reason: String(v.database_specific.deprecated),
+        isPrivate: false,
       };
     }
     const summary = (v.summary || "").toLowerCase();
@@ -31,6 +33,7 @@ export async function checkPackageDeprecation(
       return {
         isDeprecated: true,
         reason: v.summary || "Package marked as deprecated in vulnerability advisories",
+        isPrivate: false,
       };
     }
   }
@@ -44,6 +47,7 @@ export async function checkPackageDeprecation(
       return {
         isDeprecated: true,
         reason: typeof data.deprecated === "string" ? data.deprecated : "Package is deprecated on npm registry",
+        isPrivate: false,
       };
     }
 
@@ -52,6 +56,7 @@ export async function checkPackageDeprecation(
       return {
         isDeprecated: true,
         reason: String(data.versions[latestVer].deprecated),
+        isPrivate: false,
       };
     }
 
@@ -59,13 +64,20 @@ export async function checkPackageDeprecation(
       return {
         isDeprecated: true,
         reason: String(data.versions[currentVersion].deprecated),
+        isPrivate: false,
       };
     }
-  } catch {
-    // If registry query fails or times out, fallback gracefully
+  } catch (err: any) {
+    if (err.response && (err.response.status === 404 || err.response.status === 401 || err.response.status === 403)) {
+      return {
+        isDeprecated: false,
+        isPrivate: true,
+        reason: `Private package (HTTP ${err.response.status}: Not found in public npm registry)`,
+      };
+    }
   }
 
-  return { isDeprecated: false };
+  return { isDeprecated: false, isPrivate: false };
 }
 
 export function parseCvssVectorToRating(vector: string): string | null {
@@ -176,6 +188,7 @@ export function evaluateRemediation(
 ): RemediationReport {
   const isDeprecated = deprecationInfo?.isDeprecated || false;
   const deprecationReason = deprecationInfo?.reason;
+  const isPrivate = deprecationInfo?.isPrivate || false;
 
   if (!vulnerabilities || vulnerabilities.length === 0) {
     return {
@@ -184,6 +197,7 @@ export function evaluateRemediation(
       vulnerabilities: [],
       isDeprecated,
       deprecationReason,
+      isPrivate,
       remediation: { targetVersion: null, upgradeType: "NONE", hasBreakingChanges: false },
     };
   }
@@ -235,6 +249,7 @@ export function evaluateRemediation(
     vulnerabilities: vulnSummaries,
     isDeprecated,
     deprecationReason,
+    isPrivate,
     remediation: {
       targetVersion: highestFixedVersion,
       upgradeType,
