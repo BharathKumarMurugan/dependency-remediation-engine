@@ -8,6 +8,7 @@ import { getRulesForPackage } from "./codemod/registry";
 import { applyStructuralCodemod } from "./codemod/astGrepRunner";
 import { GitGuard } from "./vcs/gitGuard";
 import { getProjectName, ReportManager } from "./reporter/reportManager";
+import { classifyNpmError } from "./runner/npmErrorClassifier";
 import {
   detectPackageManager,
   hasTestSuite,
@@ -33,10 +34,10 @@ async function main() {
     process.exit(1);
   }
 
-  const projectName = await getProjectName(projectRootDir);
-  const reportManager = new ReportManager(projectRootDir);
-  await reportManager.init();
-  reportManager.startCapturing();
+  // const projectName = await getProjectName(projectRootDir);
+  // const reportManager = new ReportManager(projectRootDir);
+  // await reportManager.init();
+  // reportManager.startCapturing();
 
   // 1. Detect Package Manager and ask user at the first step
   const detectedPm = await detectPackageManager(projectRootDir);
@@ -257,7 +258,13 @@ async function main() {
       }
     } catch (pipelineError: any) {
       spin.stop(`Step skipped for ${packageName}.`);
-      if (pipelineError instanceof NoTargetVersionError || isNoTargetVersionError(pipelineError.message || "")) {
+      const knownError = classifyNpmError(pipelineError.message || "");
+
+      if (knownError) {
+        log.warn(`${knownError.userTitle}\n${knownError.userMessage}`);
+        log.info(`👉 Recommendation: ${knownError.recommendation}`);
+        await gitGuard.rollback();
+      } else if (pipelineError instanceof NoTargetVersionError || isNoTargetVersionError(pipelineError.message || "")) {
         log.warn(
           `⚠️ Skipped upgrade for "${packageName}": Target version ${remediation.targetVersion} was not found on the ${chosenPm} registry (no matching version found).`,
         );
@@ -271,18 +278,18 @@ async function main() {
 
   outro("🏁 Pipeline transaction engine loop complete.");
 
-  // Save report asynchronously right after scanning is done without disturbing terminal stdout
-  const reportPath = await reportManager.saveReport({
-    projectName,
-    scanTimestamp: new Date().toISOString(),
-    totalDependenciesScanned: queries.length,
-    vulnerablePackagesCount: vulnerableItems.length,
-    vulnerableItems,
-  });
+  // // Save report asynchronously right after scanning is done without disturbing terminal stdout
+  // const reportPath = await reportManager.saveReport({
+  //   projectName,
+  //   scanTimestamp: new Date().toISOString(),
+  //   totalDependenciesScanned: queries.length,
+  //   vulnerablePackagesCount: vulnerableItems.length,
+  //   vulnerableItems,
+  // });
 
-  if (reportPath) {
-    log.info(`📄 Scan report saved to: ${reportPath}`);
-  }
+  // if (reportPath) {
+  //   log.info(`📄 Scan report saved to: ${reportPath}`);
+  // }
 }
 
 main().catch((err) => {
