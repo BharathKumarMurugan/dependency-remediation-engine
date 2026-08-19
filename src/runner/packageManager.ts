@@ -139,11 +139,7 @@ export function isPeerDependencyError(errorMessage: string): boolean {
  * Updates package.json ONLY for direct dependencies, and lockfile ONLY for transitive dependencies.
  * Automatically cleans cache and retries with legacy peer deps / force flags if peer dependency conflicts occur.
  */
-export async function installUpgrade(
-  projectDir: string,
-  target: UpgradeTarget,
-  pm: PackageManagerType = "npm"
-): Promise<void> {
+export async function installUpgrade(projectDir: string, target: UpgradeTarget, pm: PackageManagerType = "npm"): Promise<void> {
   if (!target.packageName || !target.targetVersion) return;
 
   const config = PACKAGE_MANAGERS[pm] || PACKAGE_MANAGERS.npm;
@@ -176,9 +172,7 @@ export async function installUpgrade(
         await execAsync(fallbackCommand, { cwd: projectDir });
         return;
       } catch (fallbackError: any) {
-        throw new Error(
-          `Installation failed for ${target.packageName} using ${pm} (even with legacy peer deps flag): ${fallbackError.message}`
-        );
+        throw new Error(`Installation failed for ${target.packageName} using ${pm} (even with legacy peer deps flag): ${fallbackError.message}`);
       }
     }
 
@@ -222,10 +216,7 @@ export async function hasTestSuite(projectDir: string): Promise<boolean> {
  * Returns true if passes successfully, false if suite breaks or fails.
  * If no test suite is configured in the repository, skips execution and returns true.
  */
-export async function verifyTestSuite(
-  projectDir: string,
-  pm: PackageManagerType = "npm"
-): Promise<boolean> {
+export async function verifyTestSuite(projectDir: string, pm: PackageManagerType = "npm"): Promise<boolean> {
   const hasTests = await hasTestSuite(projectDir);
   if (!hasTests) {
     return true;
