@@ -1,12 +1,13 @@
 import fs from "fs/promises";
 import path from "path";
-import * as intro from "@clack/prompts";
+import { intro, outro, log, note, spinner, select, isCancel } from "@clack/prompts";
 import { parsePackageLock } from "./parser";
 import { fetchBatchVulnerabilities } from "./osvClient";
 import { checkPackageDeprecation, evaluateRemediation } from "./evaulator";
 import { getRulesForPackage } from "./codemod/registry";
 import { applyStructuralCodemod } from "./codemod/astGrepRunner";
 import { GitGuard } from "./vcs/gitGuard";
+import { getProjectName, ReportManager } from "./reporter/reportManager";
 import {
   detectPackageManager,
   hasTestSuite,
@@ -18,7 +19,7 @@ import {
 } from "./runner/packageManager";
 
 async function main() {
-  intro.intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");
+  intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");
 
   const targetPath = process.argv[2] || process.cwd();
   let projectRootDir = targetPath;
@@ -32,10 +33,15 @@ async function main() {
     process.exit(1);
   }
 
+  const projectName = await getProjectName(projectRootDir);
+  const reportManager = new ReportManager(projectRootDir);
+  await reportManager.init();
+  reportManager.startCapturing();
+
   // 1. Detect Package Manager and ask user at the first step
   const detectedPm = await detectPackageManager(projectRootDir);
 
-  const chosenPm = await intro.select<PackageManagerType>({
+  const chosenPm = await select<PackageManagerType>({
     message: `Select the Node package manager to use (auto-detected: ${detectedPm}):`,
     options: [
       { value: "npm", label: "npm", hint: detectedPm === "npm" ? "auto-detected" : undefined },
@@ -46,24 +52,24 @@ async function main() {
     initialValue: detectedPm,
   });
 
-  if (intro.isCancel(chosenPm)) {
-    intro.outro("Operation cancelled.");
+  if (isCancel(chosenPm)) {
+    outro("Operation cancelled.");
     process.exit(0);
   }
 
-  intro.log.info(`Active package manager selected: ${chosenPm}`);
+  log.info(`Active package manager selected: ${chosenPm}`);
 
   const gitGuard = new GitGuard(projectRootDir);
-  const spinner = intro.spinner();
+  const spin = spinner();
 
   // Safety Gate Check
   const isClean = await gitGuard.isWorkingTreeClean();
   if (!isClean) {
-    intro.log.error("🚨 Git working directory has uncommitted modifications. Please commit or stash changes before running upgrades.");
+    log.error("🚨 Git working directory has uncommitted modifications. Please commit or stash changes before running upgrades.");
     process.exit(1);
   }
 
-  spinner.start(`Scanning dependencies using ${chosenPm} lockfile parser and querying OSV.dev API...`);
+  spin.start(`Scanning dependencies using ${chosenPm} lockfile parser and querying OSV.dev API...`);
   const queries = await parsePackageLock(projectRootDir, chosenPm);
   const vulnMap = await fetchBatchVulnerabilities(queries);
 
@@ -73,14 +79,14 @@ async function main() {
       const vulns = vulnMap[key] || [];
       const deprecationInfo = await checkPackageDeprecation(q.package.name, q.version, vulns);
       return evaluateRemediation(q.package.name, q.version, vulns, deprecationInfo);
-    })
+    }),
   );
 
   const vulnerableItems = reports.filter((r) => r.vulnerabilities.length > 0 || r.isDeprecated || r.isPrivate);
-  spinner.stop(`Scan completed. Found ${vulnerableItems.length} vulnerable/deprecated/private packages.`);
+  spin.stop(`Scan completed. Found ${vulnerableItems.length} vulnerable/deprecated/private packages.`);
 
   if (vulnerableItems.length === 0) {
-    intro.outro("🎉 Your dependencies are secure. No actions needed!");
+    outro("🎉 Your dependencies are secure. No actions needed!");
     return;
   }
 
@@ -94,8 +100,8 @@ async function main() {
     "Status / Deprecated": item.isPrivate
       ? "PRIVATE (Not in npm registry)"
       : item.isDeprecated
-      ? `DEPRECATED (${item.deprecationReason || "No longer supported"})`
-      : "Active",
+        ? `DEPRECATED (${item.deprecationReason || "No longer supported"})`
+        : "Active",
   }));
 
   console.log("\n📋 Summary of Vulnerable & Deprecated Packages Identified:");
@@ -112,22 +118,20 @@ async function main() {
 
     // Skip installation if package is private / internal (not found in public npm registry)
     if (isPrivate) {
-      intro.log.warn(
-        `⚠️ Package "${packageName}" is a private/internal package (not found in public npm registry). Skipping installation.`
-      );
+      log.warn(`⚠️ Package "${packageName}" is a private/internal package (not found in public npm registry). Skipping installation.`);
       continue;
     }
 
     // Handle deprecated package logic: skip ONLY if no target safe version exists
     if (isDeprecated) {
       if (!remediation.targetVersion) {
-        intro.log.warn(
-          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}) and has no safe target version available. Skipping installation.`
+        log.warn(
+          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}) and has no safe target version available. Skipping installation.`,
         );
         continue;
       } else {
-        intro.log.warn(
-          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}), but safe target version ${remediation.targetVersion} is available. Proceeding with upgrade...`
+        log.warn(
+          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}), but safe target version ${remediation.targetVersion} is available. Proceeding with upgrade...`,
         );
       }
     }
@@ -136,9 +140,9 @@ async function main() {
 
     if (autoApproveAll) {
       shouldUpgrade = true;
-      intro.log.info(`[${i + 1}/${vulnerableItems.length}] Auto-preparing upgrade for ${packageName}...`);
+      log.info(`[${i + 1}/${vulnerableItems.length}] Auto-preparing upgrade for ${packageName}...`);
     } else {
-      intro.note(
+      note(
         `Package: ${packageName}\n` +
           `Current Installed Version: ${currentVersion}\n` +
           `Target Safe Version: ${remediation.targetVersion || "N/A"}\n` +
@@ -146,7 +150,7 @@ async function main() {
         `⚠️ Vulnerability Found [${i + 1}/${vulnerableItems.length}]: ${pkg.vulnerabilities[0]?.id || packageName}`,
       );
 
-      const choice = await intro.select({
+      const choice = await select({
         message: `Do you want to prepare the upgrade remediation for ${packageName}? (${i + 1}/${vulnerableItems.length})`,
         options: [
           { value: "yes", label: "Yes", hint: "Upgrade this package" },
@@ -155,8 +159,8 @@ async function main() {
         ],
       });
 
-      if (intro.isCancel(choice)) {
-        intro.outro("Operation cancelled.");
+      if (isCancel(choice)) {
+        outro("Operation cancelled.");
         process.exit(0);
       }
 
@@ -184,7 +188,7 @@ async function main() {
         if (rules) {
           let runCodemod = autoApproveCodemod || autoApproveAll;
           if (!runCodemod) {
-            const confirmCodemod = await intro.select({
+            const confirmCodemod = await select({
               message: `🚨 ${packageName} has MAJOR breaking structural shifts. Run automated AST Refactoring Engine?`,
               options: [
                 { value: "yes", label: "Yes", hint: "Run AST refactoring for this package" },
@@ -193,8 +197,8 @@ async function main() {
               ],
             });
 
-            if (intro.isCancel(confirmCodemod)) {
-              intro.outro("Operation cancelled.");
+            if (isCancel(confirmCodemod)) {
+              outro("Operation cancelled.");
               process.exit(0);
             }
 
@@ -207,65 +211,78 @@ async function main() {
           }
 
           if (runCodemod) {
-            spinner.start(`Running ast-grep refactoring on source files...`);
+            spin.start(`Running ast-grep refactoring on source files...`);
             const count = await applyStructuralCodemod(projectRootDir, rules);
-            spinner.stop(`AST refactoring complete. Modified structural elements in ${count} files.`);
+            spin.stop(`AST refactoring complete. Modified structural elements in ${count} files.`);
           }
         } else {
-          intro.log.warn(`No pre-configured AST refactoring rules found for ${packageName}. Manual code changes might be required.`);
+          log.warn(`No pre-configured AST refactoring rules found for ${packageName}. Manual code changes might be required.`);
         }
       }
 
       // 2. Physical package upgrade execution using selected package manager
-      spinner.start(`Installing upgraded dependency via ${chosenPm}: ${packageName}@${remediation.targetVersion}...`);
+      spin.start(`Installing upgraded dependency via ${chosenPm}: ${packageName}@${remediation.targetVersion}...`);
       await installUpgrade(
         projectRootDir,
         {
           packageName,
           targetVersion: remediation.targetVersion,
         },
-        chosenPm
+        chosenPm,
       );
-      spinner.stop(`Package installed successfully via ${chosenPm}.`);
+      spin.stop(`Package installed successfully via ${chosenPm}.`);
 
       // 3. Automated Test Verification Gate using selected package manager
       const testSuiteConfigured = await hasTestSuite(projectRootDir);
 
       if (!testSuiteConfigured) {
-        intro.log.warn(`⚠️ No test suite configured in target repository. Skipping test verification for ${packageName}.`);
-        intro.log.success(`✨ Package ${packageName} successfully updated.`);
+        log.warn(`⚠️ No test suite configured in target repository. Skipping test verification for ${packageName}.`);
+        log.success(`✨ Package ${packageName} successfully updated.`);
         await gitGuard.commitSnapshot();
       } else {
-        spinner.start(`Executing verification test suite ('${chosenPm} test')...`);
+        spin.start(`Executing verification test suite ('${chosenPm} test')...`);
         const testsPassed = await verifyTestSuite(projectRootDir, chosenPm);
 
         if (testsPassed) {
-          spinner.stop(`Verification testing passed! Remediations successfully integrated.`);
-          intro.log.success(`✨ Package ${packageName} successfully updated and verified.`);
+          spin.stop(`Verification testing passed! Remediations successfully integrated.`);
+          log.success(`✨ Package ${packageName} successfully updated and verified.`);
           await gitGuard.commitSnapshot();
         } else {
-          spinner.stop(`Verification test suite FAILED.`);
-          intro.log.error(`🚨 Post-upgrade test verification suite encountered errors. Triggering automated rollback transaction...`);
+          spin.stop(`Verification test suite FAILED.`);
+          log.error(`🚨 Post-upgrade test verification suite encountered errors. Triggering automated rollback transaction...`);
 
           await gitGuard.rollback();
-          intro.log.warn(`↩️ Rollback complete for ${packageName}. Filesystem reverted back to pre-upgrade state.`);
+          log.warn(`↩️ Rollback complete for ${packageName}. Filesystem reverted back to pre-upgrade state.`);
         }
       }
     } catch (pipelineError: any) {
-      spinner.stop(`Step skipped for ${packageName}.`);
+      spin.stop(`Step skipped for ${packageName}.`);
       if (pipelineError instanceof NoTargetVersionError || isNoTargetVersionError(pipelineError.message || "")) {
-        intro.log.warn(
-          `⚠️ Skipped upgrade for "${packageName}": Target version ${remediation.targetVersion} was not found on the ${chosenPm} registry (no matching version found).`
+        log.warn(
+          `⚠️ Skipped upgrade for "${packageName}": Target version ${remediation.targetVersion} was not found on the ${chosenPm} registry (no matching version found).`,
         );
         await gitGuard.rollback();
       } else {
-        intro.log.error(`Execution Error for ${packageName}: ${pipelineError.message}. Reverting package changes...`);
+        log.error(`Execution Error for ${packageName}: ${pipelineError.message}. Reverting package changes...`);
         await gitGuard.rollback();
       }
     }
   }
 
-  intro.outro("🏁 Pipeline transaction engine loop complete.");
+  outro("🏁 Pipeline transaction engine loop complete.");
+
+  // Save report asynchronously right after scanning is done without disturbing terminal stdout
+  const reportPath = await reportManager.saveReport({
+    projectName,
+    scanTimestamp: new Date().toISOString(),
+    totalDependenciesScanned: queries.length,
+    vulnerablePackagesCount: vulnerableItems.length,
+    vulnerableItems,
+  });
+
+  if (reportPath) {
+    log.info(`📄 Scan report saved to: ${reportPath}`);
+  }
 }
 
 main().catch((err) => {
