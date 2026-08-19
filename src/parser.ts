@@ -1,12 +1,9 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { OSVQuery } from "./types";
-import { PackageManagerType } from "./runner/packageManager";
+import { OSVQuery } from "./types.ts";
+import { PackageManagerType } from "./runner/packageManager.ts";
 
-export async function parsePackageLock(
-  targetPath: string,
-  pm: PackageManagerType = "npm"
-): Promise<OSVQuery[]> {
+export async function parsePackageLock(targetPath: string, pm: PackageManagerType = "npm"): Promise<OSVQuery[]> {
   let projectDir = targetPath;
   try {
     const stat = await fs.stat(targetPath);

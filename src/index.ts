@@ -1,14 +1,16 @@
+#!/usr/bin/env node
+
 import fs from "fs/promises";
 import path from "path";
 import { intro, outro, log, note, spinner, select, isCancel } from "@clack/prompts";
-import { parsePackageLock } from "./parser";
-import { fetchBatchVulnerabilities } from "./osvClient";
-import { checkPackageDeprecation, evaluateRemediation } from "./evaulator";
-import { getRulesForPackage } from "./codemod/registry";
-import { applyStructuralCodemod } from "./codemod/astGrepRunner";
-import { GitGuard } from "./vcs/gitGuard";
-import { getProjectName, ReportManager } from "./reporter/reportManager";
-import { classifyNpmError } from "./runner/npmErrorClassifier";
+import { parsePackageLock } from "./parser.ts";
+import { fetchBatchVulnerabilities } from "./osvClient.ts";
+import { checkPackageDeprecation, evaluateRemediation } from "./evaulator.ts";
+import { getRulesForPackage } from "./codemod/registry.ts";
+import { applyStructuralCodemod } from "./codemod/astGrepRunner.ts";
+import { GitGuard } from "./vcs/gitGuard.ts";
+import { getProjectName, ReportManager } from "./reporter/reportManager.ts";
+import { classifyNpmError } from "./runner/npmErrorClassifier.ts";
 import {
   detectPackageManager,
   hasTestSuite,
@@ -17,7 +19,7 @@ import {
   NoTargetVersionError,
   PackageManagerType,
   verifyTestSuite,
-} from "./runner/packageManager";
+} from "./runner/packageManager.ts";
 
 async function main() {
   intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");

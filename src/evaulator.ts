@@ -1,6 +1,6 @@
 import axios from "axios";
 import semver from "semver";
-import { OSVVulnerability, RemediationReport, VulnerabilitySummary } from "./types";
+import { OSVVulnerability, RemediationReport, VulnerabilitySummary } from "./types.ts";
 
 export interface DeprecationInfo {
   isDeprecated: boolean;
@@ -11,7 +11,7 @@ export interface DeprecationInfo {
 export async function checkPackageDeprecation(
   packageName: string,
   currentVersion?: string,
-  vulnerabilities: OSVVulnerability[] = []
+  vulnerabilities: OSVVulnerability[] = [],
 ): Promise<DeprecationInfo> {
   for (const v of vulnerabilities) {
     if (v.database_specific?.deprecated) {
@@ -184,7 +184,7 @@ export function evaluateRemediation(
   packageName: string,
   currentVersion: string,
   vulnerabilities: OSVVulnerability[],
-  deprecationInfo?: DeprecationInfo
+  deprecationInfo?: DeprecationInfo,
 ): RemediationReport {
   const isDeprecated = deprecationInfo?.isDeprecated || false;
   const deprecationReason = deprecationInfo?.reason;

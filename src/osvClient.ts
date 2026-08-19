@@ -1,5 +1,5 @@
 import axios from "axios";
-import { OSVQuery, OSVVulnerability } from "./types";
+import { OSVQuery, OSVVulnerability } from "./types.ts";
 
 const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns";
@@ -81,9 +81,7 @@ export async function fetchBatchVulnerabilities(queries: OSVQuery[]): Promise<Re
   const finalizedVulnMap: Record<string, OSVVulnerability[]> = {};
 
   for (const [packageKey, vulnIds] of Object.entries(initialBatchMap)) {
-    finalizedVulnMap[packageKey] = vulnIds
-      .map((id) => hydrationRecords[id])
-      .filter((v): v is OSVVulnerability => !!v);
+    finalizedVulnMap[packageKey] = vulnIds.map((id) => hydrationRecords[id]).filter((v): v is OSVVulnerability => !!v);
   }
 
   return finalizedVulnMap;
