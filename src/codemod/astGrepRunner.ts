@@ -1,6 +1,9 @@
-import { js, ts, SgNode } from "@ast-grep/napi";
 import * as fs from "fs/promises";
+import fsSync from "fs";
 import * as path from "path";
+import os from "os";
+import Piscina from "piscina";
+import { processFileChunk } from "./astGrepWorkerTask.ts";
 
 export interface CodemodRule {
   selector: string; // Structural search pattern (e.g., $$$A.oldMethod($$$B))
@@ -42,52 +45,27 @@ function isSupportedFile(fileName: string, customExtensions?: string[]): boolean
   return allowed.includes(extName);
 }
 
-function transformCodeSnippet(
-  code: string,
-  isTypeScript: boolean,
-  rules: CodemodRule[]
-): string {
-  let currentCode = code;
-
-  for (const rule of rules) {
-    try {
-      const parseFn = isTypeScript ? ts.parse : js.parse;
-      const sgRoot = parseFn(currentCode);
-      const rootNode = sgRoot.root();
-
-      const matches = rootNode.findAll(rule.selector);
-
-      if (matches.length > 0) {
-        const edits = matches.map((node: SgNode) => {
-          let replacementText = rule.replacement;
-          const metaVarRegex = /\$([A-Z_][A-Z0-9_]*)/g;
-          replacementText = replacementText.replace(metaVarRegex, (fullMatch, varName) => {
-            const matchedNode = node.getMatch(varName);
-            return matchedNode ? matchedNode.text() : fullMatch;
-          });
-
-          return node.replace(replacementText);
-        });
-
-        currentCode = rootNode.commitEdits(edits);
-      }
-    } catch {
-      // Ignore syntax errors in snippet parsing, preserve original code
-    }
-  }
-
-  return currentCode;
+/**
+ * Utility to split candidate files into balanced chunks across worker threads
+ */
+function chunkArrayBalanced<T>(array: T[], numChunks: number): T[][] {
+  const chunks: T[][] = Array.from({ length: numChunks }, () => []);
+  array.forEach((item, index) => {
+    chunks[index % numChunks].push(item);
+  });
+  return chunks.filter((chunk) => chunk.length > 0);
 }
 
 /**
- * Iterates through files in a directory and applies structural replacements across all JS/TS module types & framework templates
+ * Iterates through files in a directory, balances them across CPU worker threads (os.cpus().length - 1),
+ * and applies structural AST code refactoring concurrently without blocking the main V8 thread.
  */
 export async function applyStructuralCodemod(
   targetDir: string,
   rules: CodemodRule[],
   extensions: string[] = SUPPORTED_EXTENSIONS
 ): Promise<number> {
-  let filesModified = 0;
+  const candidateFiles: string[] = [];
 
   async function walk(dir: string) {
     const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -107,55 +85,42 @@ export async function applyStructuralCodemod(
         }
         await walk(fullPath);
       } else if (entry.isFile() && isSupportedFile(entry.name, extensions)) {
-        const content = await fs.readFile(fullPath, "utf-8");
-        const lowerName = entry.name.toLowerCase();
-        const ext = path.extname(entry.name).toLowerCase();
-
-        const isTypeScript =
-          lowerName.endsWith(".ts") ||
-          lowerName.endsWith(".tsx") ||
-          lowerName.endsWith(".mts") ||
-          lowerName.endsWith(".cts") ||
-          lowerName.endsWith(".d.ts") ||
-          lowerName.endsWith(".d.mts") ||
-          lowerName.endsWith(".d.cts") ||
-          content.includes('lang="ts"') ||
-          content.includes("lang='ts'");
-
-        let updatedContent = content;
-
-        if (ext === ".vue" || ext === ".svelte" || ext === ".astro") {
-          // Transform script blocks inside Frontend Framework Single File Components
-          updatedContent = updatedContent.replace(
-            /(<script[\s\S]*?>)([\s\S]*?)(<\/script>)/gi,
-            (_full, openTag, scriptCode, closeTag) => {
-              const isScriptTS =
-                isTypeScript || openTag.toLowerCase().includes('lang="ts"') || openTag.toLowerCase().includes("lang='ts'");
-              return openTag + transformCodeSnippet(scriptCode, isScriptTS, rules) + closeTag;
-            }
-          );
-
-          if (ext === ".astro") {
-            // Transform Astro frontmatter fence blocks (--- code ---)
-            updatedContent = updatedContent.replace(
-              /^(---[\r\n]+)([\s\S]*?)([\r\n]+---)/m,
-              (_full, openFence, fenceCode, closeFence) => {
-                return openFence + transformCodeSnippet(fenceCode, isTypeScript, rules) + closeFence;
-              }
-            );
-          }
-        } else {
-          updatedContent = transformCodeSnippet(content, isTypeScript, rules);
-        }
-
-        if (updatedContent !== content) {
-          await fs.writeFile(fullPath, updatedContent, "utf-8");
-          filesModified++;
-        }
+        candidateFiles.push(fullPath);
       }
     }
   }
 
   await walk(targetDir);
-  return filesModified;
+
+  if (candidateFiles.length === 0) return 0;
+
+  // Calculate worker threads equal to os.cpus().length - 1 (minimum 1 thread)
+  const availableCpus = os.cpus()?.length || 1;
+  const numThreads = Math.max(1, availableCpus - 1);
+
+  // Split files into balanced chunks for CPU worker threads
+  const chunks = chunkArrayBalanced(candidateFiles, Math.min(numThreads, candidateFiles.length));
+
+  // Check compiled JS worker task location
+  const compiledJsWorker = path.resolve(__dirname, "./astGrepWorkerTask.js");
+  const isCompiled = fsSync.existsSync(compiledJsWorker);
+
+  if (isCompiled) {
+    try {
+      const pool = new Piscina({
+        filename: compiledJsWorker,
+        maxThreads: numThreads,
+      });
+
+      const tasks = chunks.map((chunk) => pool.run({ files: chunk, rules }));
+      const results = await Promise.all(tasks);
+      return results.reduce((sum, count) => sum + count, 0);
+    } catch {
+      // Fallback
+    }
+  }
+
+  // Fallback for ts-node / Jest development environments: process file chunks asynchronously
+  const results = await Promise.all(chunks.map((chunk) => processFileChunk(chunk, rules)));
+  return results.reduce((sum, count) => sum + count, 0);
 }

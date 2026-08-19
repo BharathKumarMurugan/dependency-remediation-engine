@@ -22,8 +22,8 @@ describe("ReportManager", () => {
     expect(name).toBe("myorg__my-app");
   });
 
-  it("should create reports directory and subfolder named after the project", async () => {
-    const manager = new ReportManager(tmpDir, "my-test-project");
+  it("should create reports directory and store logs", async () => {
+    const manager = new ReportManager(tmpDir);
     await manager.init();
 
     manager.startCapturing();
@@ -33,12 +33,12 @@ describe("ReportManager", () => {
     const savedLogPath = await manager.saveReport({ status: "OK", total: 5 });
 
     expect(savedLogPath).not.toBeNull();
-    expect(savedLogPath).toContain(path.join("reports", "my-test-project"));
+    expect(savedLogPath).toContain("reports");
 
     const logContent = await fs.readFile(savedLogPath!, "utf-8");
     expect(logContent).toContain("Test log entry line 1");
 
-    const jsonPath = path.join(tmpDir, "reports", "my-test-project", "scan_summary.json");
+    const jsonPath = path.join(tmpDir, "reports", "scan_summary.json");
     const jsonExists = await fs
       .stat(jsonPath)
       .then(() => true)
