@@ -1,7 +1,21 @@
 import * as fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import { OSVQuery } from "./types.ts";
 import { PackageManagerType } from "./runner/packageManager.ts";
+
+/**
+ * Reads file content using Node.js ReadableStream to reduce I/O load on large lockfiles
+ */
+function readFileAsStream(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath, { encoding: "utf-8", highWaterMark: 64 * 1024 });
+    const chunks: string[] = [];
+    stream.on("data", (chunk) => chunks.push(chunk as string));
+    stream.on("end", () => resolve(chunks.join("")));
+    stream.on("error", (err) => reject(err));
+  });
+}
 
 export async function parsePackageLock(targetPath: string, pm: PackageManagerType = "npm"): Promise<OSVQuery[]> {
   let projectDir = targetPath;
@@ -37,7 +51,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
   if (pm === "pnpm") {
     const pnpmLockPath = path.join(projectDir, "pnpm-lock.yaml");
     try {
-      const content = await fs.readFile(pnpmLockPath, "utf-8");
+      const content = await readFileAsStream(pnpmLockPath);
       const regex = /(?:^|\s)['"]?(?:\/)?(@?[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)?)@([0-9]+\.[0-9]+\.[0-9]+[^\s'":]*)/g;
       let match: RegExpExecArray | null;
       while ((match = regex.exec(content)) !== null) {
@@ -51,7 +65,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
   if (pm === "yarn") {
     const yarnLockPath = path.join(projectDir, "yarn.lock");
     try {
-      const content = await fs.readFile(yarnLockPath, "utf-8");
+      const content = await readFileAsStream(yarnLockPath);
       const blocks = content.split(/\n\n+/);
       for (const block of blocks) {
         const lines = block.split("\n");
@@ -74,7 +88,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
   if (pm === "bun") {
     const bunLockPath = path.join(projectDir, "bun.lock");
     try {
-      const content = await fs.readFile(bunLockPath, "utf-8");
+      const content = await readFileAsStream(bunLockPath);
       try {
         const parsed = JSON.parse(content);
         if (parsed.packages) {
@@ -98,7 +112,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
   // 4. npm lockfile parser (package-lock.json)
   const npmLockPath = path.join(projectDir, "package-lock.json");
   try {
-    const content = await fs.readFile(npmLockPath, "utf-8");
+    const content = await readFileAsStream(npmLockPath);
     const lockfile = JSON.parse(content);
 
     if (lockfile.packages) {
@@ -120,7 +134,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
   // 5. Fallback to direct dependencies in package.json
   try {
     const pkgJsonPath = path.join(projectDir, "package.json");
-    const content = await fs.readFile(pkgJsonPath, "utf-8");
+    const content = await readFileAsStream(pkgJsonPath);
     const pkg = JSON.parse(content);
 
     const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };

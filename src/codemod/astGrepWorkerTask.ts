@@ -13,8 +13,8 @@ function transformCodeSnippet(
   for (const rule of rules) {
     try {
       const parseFn = isTypeScript ? ts.parse : js.parse;
-      const sgRoot = parseFn(currentCode);
-      const rootNode = sgRoot.root();
+      let sgRoot: any = parseFn(currentCode);
+      let rootNode: any = sgRoot.root();
 
       const matches = rootNode.findAll(rule.selector);
 
@@ -32,6 +32,10 @@ function transformCodeSnippet(
 
         currentCode = rootNode.commitEdits(edits);
       }
+
+      // Explicitly release AST node references for V8 Garbage Collection
+      sgRoot = null;
+      rootNode = null;
     } catch {
       // Ignore syntax errors in snippet parsing, preserve original code
     }

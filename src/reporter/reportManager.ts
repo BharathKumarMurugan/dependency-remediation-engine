@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import { createWriteStream } from "fs";
 import path from "path";
 import { stripVTControlCharacters } from "util";
 
@@ -13,6 +14,22 @@ export async function getProjectName(projectRootDir: string): Promise<string> {
     }
   } catch {}
   return path.basename(projectRootDir) || "target_project";
+}
+
+/**
+ * Utility to write arrays of string log chunks to disk using a WritableStream
+ */
+function writeChunksToStream(filePath: string, chunks: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const stream = createWriteStream(filePath, { encoding: "utf-8", highWaterMark: 64 * 1024 });
+    stream.on("finish", resolve);
+    stream.on("error", reject);
+
+    for (const chunk of chunks) {
+      stream.write(stripVTControlCharacters(chunk));
+    }
+    stream.end();
+  });
 }
 
 export class ReportManager {
@@ -68,7 +85,8 @@ export class ReportManager {
   }
 
   /**
-   * Concurrently writes captured console.log and JSON summary to disk after scanning completes
+   * Streams captured console logs and JSON summary to disk after scanning completes,
+   * then clears memory buffer immediately.
    */
   async saveReport(scanSummaryData?: any): Promise<string | null> {
     try {
@@ -85,14 +103,14 @@ export class ReportManager {
         this.logFilePath = path.join(this.projectReportDir, `scan_report_${timestamp}.log`);
       }
 
-      const content = this.logBuffer.join("");
-
-      // Perform non-blocking async file write
-      await fs.writeFile(this.logFilePath, stripVTControlCharacters(content), "utf-8");
+      // Stream log buffer directly to file via WritableStream
+      await writeChunksToStream(this.logFilePath, this.logBuffer);
+      this.logBuffer = []; // Clear buffer memory immediately for Garbage Collection
 
       if (scanSummaryData) {
         const jsonPath = path.join(this.projectReportDir, "scan_summary.json");
-        await fs.writeFile(jsonPath, JSON.stringify(scanSummaryData, null, 2), "utf-8");
+        const jsonContent = JSON.stringify(scanSummaryData, null, 2);
+        await writeChunksToStream(jsonPath, [jsonContent]);
       }
 
       return this.logFilePath;
