@@ -1,7 +1,7 @@
 import { js, ts, SgNode } from "@ast-grep/napi";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { CodemodRule } from "./astGrepRunner";
+import type { CodemodRule } from "./astGrepRunner.ts";
 
 function transformCodeSnippet(
   code: string,

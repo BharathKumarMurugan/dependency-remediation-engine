@@ -1,6 +1,6 @@
 import axios from "axios";
 import semver from "semver";
-import { OSVVulnerability, RemediationReport, VulnerabilitySummary } from "./types.ts";
+import type { OSVVulnerability, RemediationReport, VulnerabilitySummary } from "./types.ts";
 
 export interface DeprecationInfo {
   isDeprecated: boolean;

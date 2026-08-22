@@ -18,9 +18,9 @@ import {
   installUpgrade,
   isNoTargetVersionError,
   NoTargetVersionError,
-  PackageManagerType,
   verifyTestSuite,
 } from "./runner/packageManager.ts";
+import type { PackageManagerType } from "./runner/packageManager.ts";
 
 async function main() {
   intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");

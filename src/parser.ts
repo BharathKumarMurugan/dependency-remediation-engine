@@ -1,8 +1,8 @@
 import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
-import { OSVQuery } from "./types.ts";
-import { PackageManagerType } from "./runner/packageManager.ts";
+import type { OSVQuery } from "./types.ts";
+import type { PackageManagerType } from "./runner/packageManager.ts";
 
 /**
  * Reads file content using Node.js ReadableStream to reduce I/O load on large lockfiles

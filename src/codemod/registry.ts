@@ -1,4 +1,4 @@
-import { CodemodRule } from "./astGrepRunner";
+import type { CodemodRule } from "./astGrepRunner.ts";
 
 export const CODEMOD_REGISTRY: Record<string, CodemodRule[]> = {
   // Example rule mapping for when a target breaking package is identified

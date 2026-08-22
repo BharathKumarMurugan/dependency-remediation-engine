@@ -1,6 +1,6 @@
 import axios from "axios";
 import pLimit from "p-limit";
-import { OSVQuery, OSVVulnerability } from "./types.ts";
+import type { OSVQuery, OSVVulnerability } from "./types.ts";
 
 const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns";
