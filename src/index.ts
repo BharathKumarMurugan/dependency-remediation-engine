@@ -11,6 +11,7 @@ import { applyStructuralCodemod } from "./codemod/astGrepRunner.ts";
 import { GitGuard } from "./vcs/gitGuard.ts";
 import { getProjectName, ReportManager } from "./reporter/reportManager.ts";
 import { classifyNpmError } from "./runner/npmErrorClassifier.ts";
+import pLimit from "p-limit";
 import {
   detectPackageManager,
   hasTestSuite,
@@ -76,13 +77,17 @@ async function main() {
   const queries = await parsePackageLock(projectRootDir, chosenPm);
   const vulnMap = await fetchBatchVulnerabilities(queries);
 
+  const limit = pLimit(20);
+
   const reports = await Promise.all(
-    queries.map(async (q) => {
-      const key = `${q.package.name}@${q.version}`;
-      const vulns = vulnMap[key] || [];
-      const deprecationInfo = await checkPackageDeprecation(q.package.name, q.version, vulns);
-      return evaluateRemediation(q.package.name, q.version, vulns, deprecationInfo);
-    }),
+    queries.map((q) =>
+      limit(async () => {
+        const key = `${q.package.name}@${q.version}`;
+        const vulns = vulnMap[key] || [];
+        const deprecationInfo = await checkPackageDeprecation(q.package.name, q.version, vulns);
+        return evaluateRemediation(q.package.name, q.version, vulns, deprecationInfo);
+      })
+    )
   );
 
   const vulnerableItems = reports.filter((r) => r.vulnerabilities.length > 0 || r.isDeprecated || r.isPrivate);
