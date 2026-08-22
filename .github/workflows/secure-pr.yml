@@ -1,0 +1,31 @@
+nmae: Secure PR checks
+
+# trigger the workflow when a new PR is created
+on:
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  security_scans:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      # checkout the code
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+      # Initialize CodeQL (Static Application Security Testing - SAST)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: "javascript"
+      # Run Dependency Review (Catches vulnerable npm/pip/cargo packages)
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+      # Perform CodeQL Analysis
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
