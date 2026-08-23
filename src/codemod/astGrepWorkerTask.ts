@@ -94,6 +94,7 @@ export async function processFileChunk(files: string[], rules: CodemodRule[]): P
       }
 
       if (updatedContent !== content) {
+        // File paths across worker chunks are disjoint partitions, so direct write is thread-safe
         await fs.writeFile(fullPath, updatedContent, "utf-8");
         filesModified++;
       }

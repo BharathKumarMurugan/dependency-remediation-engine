@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import { createWriteStream } from "fs";
 import path from "path";
 import { stripVTControlCharacters } from "util";
+import { filePathMutex } from "../vcs/filePathMutex.ts";
 
 export async function getProjectName(projectRootDir: string): Promise<string> {
   try {
@@ -17,18 +18,20 @@ export async function getProjectName(projectRootDir: string): Promise<string> {
 }
 
 /**
- * Utility to write arrays of string log chunks to disk using a WritableStream
+ * Utility to write arrays of string log chunks to disk using a WritableStream under an exclusive file path lock
  */
 function writeChunksToStream(filePath: string, chunks: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const stream = createWriteStream(filePath, { encoding: "utf-8", highWaterMark: 64 * 1024 });
-    stream.on("finish", resolve);
-    stream.on("error", reject);
+  return filePathMutex.runExclusive(filePath, () => {
+    return new Promise((resolve, reject) => {
+      const stream = createWriteStream(filePath, { encoding: "utf-8", highWaterMark: 64 * 1024 });
+      stream.on("finish", resolve);
+      stream.on("error", reject);
 
-    for (const chunk of chunks) {
-      stream.write(stripVTControlCharacters(chunk));
-    }
-    stream.end();
+      for (const chunk of chunks) {
+        stream.write(stripVTControlCharacters(chunk));
+      }
+      stream.end();
+    });
   });
 }
 
@@ -103,7 +106,7 @@ export class ReportManager {
         this.logFilePath = path.join(this.projectReportDir, `scan_report_${timestamp}.log`);
       }
 
-      // Stream log buffer directly to file via WritableStream
+      // Stream log buffer directly to file via WritableStream under file path mutex
       await writeChunksToStream(this.logFilePath, this.logBuffer);
       this.logBuffer = []; // Clear buffer memory immediately for Garbage Collection
 

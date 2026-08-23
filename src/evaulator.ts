@@ -1,6 +1,63 @@
 import axios from "axios";
 import semver from "semver";
+import https from "node:https";
+import http from "node:http";
 import type { OSVVulnerability, RemediationReport, VulnerabilitySummary } from "./types.ts";
+
+const CONCURRENCY_LIMIT = 20;
+
+// Optimized HTTP/HTTPS Agents with TCP Keep-Alive connection pooling for npm registry queries
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: CONCURRENCY_LIMIT,
+  keepAliveMsecs: 10000,
+});
+
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: CONCURRENCY_LIMIT,
+  keepAliveMsecs: 10000,
+});
+
+const registryClient = axios.create({
+  httpAgent,
+  httpsAgent,
+});
+
+/**
+ * Executes registry calls with exponential backoff retries for transient network faults
+ */
+async function fetchRegistryWithRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 500): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      attempt++;
+      const status = error.response?.status;
+      // Do not retry 404/401/403 private package responses
+      if (status === 404 || status === 401 || status === 403) {
+        throw error;
+      }
+      const isRetryable =
+        !error.response ||
+        error.code === "ECONNRESET" ||
+        error.code === "ETIMEDOUT" ||
+        error.code === "EAI_AGAIN" ||
+        error.code === "ENOTFOUND" ||
+        error.code === "ECONNREFUSED" ||
+        (status && status >= 500 && status <= 599) ||
+        status === 429;
+
+      if (attempt >= retries || !isRetryable) {
+        throw error;
+      }
+
+      const backoff = delayMs * Math.pow(2, attempt - 1);
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
+  }
+}
 
 export interface DeprecationInfo {
   isDeprecated: boolean;
@@ -40,7 +97,7 @@ export async function checkPackageDeprecation(
 
   try {
     const url = `https://registry.npmjs.org/${encodeURIComponent(packageName)}`;
-    const response = await axios.get(url, { timeout: 3000 });
+    const response = await fetchRegistryWithRetry(() => registryClient.get(url, { timeout: 3000 }));
     const data = response.data;
 
     if (data.deprecated) {
