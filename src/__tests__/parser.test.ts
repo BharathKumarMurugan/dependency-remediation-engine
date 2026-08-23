@@ -47,20 +47,36 @@ describe("parsePackageLock", () => {
     });
   });
 
-  it("should support v1 dependencies format", async () => {
+  it("should support v1 dependencies format and recursively parse nested sub-dependencies", async () => {
     const lockfileContent = JSON.stringify({
+      lockfileVersion: 1,
       dependencies: {
-        express: { version: "4.17.1" },
+        express: {
+          version: "4.17.1",
+          dependencies: {
+            qs: { version: "6.7.0" },
+            cookie: {
+              version: "0.4.0",
+              dependencies: {
+                "sub-cookie": { version: "1.0.0" },
+              },
+            },
+          },
+        },
       },
     });
     await fs.writeFile(path.join(tmpDir, "package-lock.json"), lockfileContent, "utf-8");
 
     const result = await parsePackageLock(tmpDir);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({
-      package: { name: "express", ecosystem: "npm" },
-      version: "4.17.1",
-    });
+    expect(result).toHaveLength(4);
+    expect(result).toEqual(
+      expect.arrayContaining([
+        { package: { name: "express", ecosystem: "npm" }, version: "4.17.1" },
+        { package: { name: "qs", ecosystem: "npm" }, version: "6.7.0" },
+        { package: { name: "cookie", ecosystem: "npm" }, version: "0.4.0" },
+        { package: { name: "sub-cookie", ecosystem: "npm" }, version: "1.0.0" },
+      ])
+    );
   });
 
   it("should parse pnpm-lock.yaml when pnpm package manager is selected", async () => {
