@@ -47,6 +47,24 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
     }
   }
 
+  /**
+   * Recursively traverses legacy lockfileVersion: 1 dependencies objects to extract all direct and nested sub-dependencies offline
+   */
+  function parseLegacyDependencies(depsObj: Record<string, any>) {
+    if (!depsObj || typeof depsObj !== "object") return;
+    for (const [pkgName, pkgData] of Object.entries(depsObj)) {
+      if (pkgData && typeof pkgData === "object") {
+        const version = (pkgData as { version?: string }).version;
+        if (pkgName && version && typeof version === "string") {
+          addQuery(pkgName, version);
+        }
+        if ((pkgData as { dependencies?: Record<string, any> }).dependencies) {
+          parseLegacyDependencies((pkgData as { dependencies: Record<string, any> }).dependencies);
+        }
+      }
+    }
+  }
+
   // 1. pnpm lockfile parser (pnpm-lock.yaml)
   if (pm === "pnpm") {
     const pnpmLockPath = path.join(projectDir, "pnpm-lock.yaml");
@@ -123,10 +141,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
         if (packageName && version) addQuery(packageName, version);
       }
     } else if (lockfile.dependencies) {
-      for (const [pkgName, pkgData] of Object.entries(lockfile.dependencies)) {
-        const version = (pkgData as { version?: string }).version;
-        if (pkgName && version) addQuery(pkgName, version);
-      }
+      parseLegacyDependencies(lockfile.dependencies);
     }
     if (queries.length > 0) return queries;
   } catch {}
