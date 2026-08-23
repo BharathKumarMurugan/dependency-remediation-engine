@@ -86,7 +86,7 @@ The architectural boundaries of the application core are completely pluggable. W
 
 ### Prerequisites
 
-- Node.js runtime environment (v20+ recommended).
+- Node.js runtime environment (v22+ recommended).
 - Git binary binary commands configured in the local shell.
 
 ### Installation
