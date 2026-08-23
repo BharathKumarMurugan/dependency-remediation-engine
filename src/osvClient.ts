@@ -1,11 +1,66 @@
 import axios from "axios";
 import pLimit from "p-limit";
+import https from "node:https";
+import http from "node:http";
 import type { OSVQuery, OSVVulnerability } from "./types.ts";
 
 const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL = "https://api.osv.dev/v1/vulns";
 const MAX_BATCH_SIZE = 500;
 const CONCURRENCY_LIMIT = 20;
+
+// Optimized HTTP/HTTPS Agents with TCP Keep-Alive connection pooling
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: CONCURRENCY_LIMIT,
+  keepAliveMsecs: 10000,
+});
+
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: CONCURRENCY_LIMIT,
+  keepAliveMsecs: 10000,
+});
+
+const axiosClient = axios.create({
+  httpAgent,
+  httpsAgent,
+});
+
+/**
+ * Executes a network call with exponential backoff retries for transient network faults
+ */
+export async function withNetworkRetry<T>(
+  fn: () => Promise<T>,
+  retries = 3,
+  delayMs = 500
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      attempt++;
+      const status = error.response?.status;
+      const isRetryable =
+        !error.response ||
+        error.code === "ECONNRESET" ||
+        error.code === "ETIMEDOUT" ||
+        error.code === "EAI_AGAIN" ||
+        error.code === "ENOTFOUND" ||
+        error.code === "ECONNREFUSED" ||
+        (status && status >= 500 && status <= 599) ||
+        status === 429;
+
+      if (attempt >= retries || !isRetryable) {
+        throw error;
+      }
+
+      const backoff = delayMs * Math.pow(2, attempt - 1);
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
+  }
+}
 
 /**
  * Utility to split an array into chunks of a specified size
@@ -23,8 +78,10 @@ function chunkArray<T>(array: T[], size: number): T[][] {
  */
 async function fetchVulnerabilityDetails(id: string): Promise<OSVVulnerability | null> {
   try {
-    const response = await axios.get(`${OSV_VULN_URL}/${id}`, { timeout: 10000 });
-    return response.data;
+    return await withNetworkRetry(async () => {
+      const response = await axiosClient.get(`${OSV_VULN_URL}/${id}`, { timeout: 10000 });
+      return response.data;
+    });
   } catch (error) {
     console.error(`[-] Failed to hydrate vulnerability ${id}:`, error);
     return null;
@@ -44,7 +101,9 @@ export async function fetchBatchVulnerabilities(queries: OSVQuery[]): Promise<Re
   const batchPromises = queryChunks.map((chunk) =>
     limit(async () => {
       try {
-        const response = await axios.post(OSV_BATCH_URL, { queries: chunk }, { timeout: 30000 });
+        const response = await withNetworkRetry(async () => {
+          return await axiosClient.post(OSV_BATCH_URL, { queries: chunk }, { timeout: 30000 });
+        });
         const results = response.data.results || [];
 
         results.forEach((res: { vulns?: Array<{ id: string }> }, index: number) => {
