@@ -2,7 +2,6 @@ import { js, ts, SgNode } from "@ast-grep/napi";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { CodemodRule } from "./astGrepRunner.ts";
-import { filePathMutex } from "../vcs/filePathMutex.ts";
 
 function transformCodeSnippet(
   code: string,
@@ -95,7 +94,8 @@ export async function processFileChunk(files: string[], rules: CodemodRule[]): P
       }
 
       if (updatedContent !== content) {
-        await filePathMutex.runExclusive(fullPath, () => fs.writeFile(fullPath, updatedContent, "utf-8"));
+        // File paths across worker chunks are disjoint partitions, so direct write is thread-safe
+        await fs.writeFile(fullPath, updatedContent, "utf-8");
         filesModified++;
       }
     } catch {
