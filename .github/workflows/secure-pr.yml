@@ -1,6 +1,6 @@
-nmae: Secure PR checks
+name: Secure PR checks
 
-# trigger the workflow when a new PR is created
+# trigger the workflow when a new PR is created or updated targeting main/master branches
 on:
   pull_request:
     branches: ["main", "master"]
@@ -18,14 +18,17 @@ jobs:
       # checkout the code
       - name: Checkout Repo
         uses: actions/checkout@v4
-      # Initialize CodeQL (Static Application Security Testing - SAST)
+
+      # Initialize CodeQL (Static Application Security Testing - SAST) for JS/TS
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: "javascript"
+          languages: "javascript-typescript"
+
       # Run Dependency Review (Catches vulnerable npm/pip/cargo packages)
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
+
       # Perform CodeQL Analysis
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
