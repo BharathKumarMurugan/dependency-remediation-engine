@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { applyStructuralCodemod, CodemodRule, SUPPORTED_EXTENSIONS } from "../codemod/astGrepRunner";
+import { applyStructuralCodemod, CodemodRule } from "../codemod/astGrepRunner";
+import { CODEMOD_REGISTRY } from "../codemod/registry";
 
 describe("applyStructuralCodemod", () => {
   let tmpDir: string;
@@ -40,6 +41,31 @@ app.get('/error', (req, res) => {
     const updatedContent = await fs.readFile(filePath, "utf-8");
     expect(updatedContent).not.toContain("[object Object]");
     expect(updatedContent).toContain("res.status(404).send('Page not found')");
+  });
+
+  it("should support variant import styles including CJS require, destructured, ESM default/named/namespace, and dynamic imports", async () => {
+    const rules = CODEMOD_REGISTRY["request"];
+    expect(rules).toBeDefined();
+
+    const cjsFile = path.join(tmpDir, "cjs.js");
+    const esmFile = path.join(tmpDir, "esm.js");
+    const dynamicFile = path.join(tmpDir, "dynamic.js");
+
+    await fs.writeFile(cjsFile, "const request = require('request');\nconst { get } = require('request');", "utf-8");
+    await fs.writeFile(esmFile, "import request from 'request';\nimport { get } from 'request';\nimport * as request from 'request';", "utf-8");
+    await fs.writeFile(dynamicFile, "async function run() { await import('request'); }", "utf-8");
+
+    const modifiedCount = await applyStructuralCodemod(tmpDir, rules);
+    expect(modifiedCount).toBe(3);
+
+    const cjsUpdated = await fs.readFile(cjsFile, "utf-8");
+    expect(cjsUpdated).toContain("require('axios')");
+
+    const esmUpdated = await fs.readFile(esmFile, "utf-8");
+    expect(esmUpdated).toContain("from 'axios'");
+
+    const dynamicUpdated = await fs.readFile(dynamicFile, "utf-8");
+    expect(dynamicUpdated).toContain("import('axios')");
   });
 
   it("should support explicit module specs (.mjs, .cjs, .mts, .cts)", async () => {
