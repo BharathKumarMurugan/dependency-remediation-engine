@@ -11,6 +11,7 @@ import { applyStructuralCodemod } from "./codemod/astGrepRunner.ts";
 import { GitGuard } from "./vcs/gitGuard.ts";
 import { getProjectName, ReportManager } from "./reporter/reportManager.ts";
 import { classifyNpmError } from "./runner/npmErrorClassifier.ts";
+import { checkProductionGuard } from "./runner/envGuard.ts";
 import pLimit from "p-limit";
 import {
   detectPackageManager,
@@ -24,6 +25,19 @@ import type { PackageManagerType } from "./runner/packageManager.ts";
 
 async function main() {
   intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");
+
+  // Production Environment Guard & Safety Check
+  const envGuard = checkProductionGuard();
+  if (!envGuard.shouldProceed) {
+    log.error(envGuard.warningMessage!);
+    process.exit(1);
+  }
+
+  if (envGuard.isProduction && envGuard.hasForceFlag) {
+    log.warn(envGuard.warningMessage!);
+  } else {
+    log.info("ℹ️ Verified development environment mode.");
+  }
 
   const targetPath = process.argv[2] || process.cwd();
   let projectRootDir = targetPath;
