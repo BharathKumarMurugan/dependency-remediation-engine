@@ -100,6 +100,47 @@ export async function isDirectDependency(projectDir: string, packageName: string
   }
 }
 
+/**
+ * Injects transitive package override/resolution rule into package.json for the specified package manager.
+ */
+export async function applyTransitiveOverride(
+  projectDir: string,
+  packageName: string,
+  targetVersion: string,
+  pm: PackageManagerType = "npm"
+): Promise<void> {
+  try {
+    const pkgPath = path.join(projectDir, "package.json");
+    const content = await fs.readFile(pkgPath, "utf-8");
+    const pkg = JSON.parse(content);
+
+    if (pm === "yarn") {
+      pkg.resolutions = pkg.resolutions || {};
+      pkg.resolutions[packageName] = targetVersion;
+    } else if (pm === "pnpm") {
+      pkg.pnpm = pkg.pnpm || {};
+      pkg.pnpm.overrides = pkg.pnpm.overrides || {};
+      pkg.pnpm.overrides[packageName] = targetVersion;
+
+      pkg.overrides = pkg.overrides || {};
+      pkg.overrides[packageName] = targetVersion;
+    } else if (pm === "bun") {
+      pkg.overrides = pkg.overrides || {};
+      pkg.overrides[packageName] = targetVersion;
+      pkg.resolutions = pkg.resolutions || {};
+      pkg.resolutions[packageName] = targetVersion;
+    } else {
+      // Default npm overrides
+      pkg.overrides = pkg.overrides || {};
+      pkg.overrides[packageName] = targetVersion;
+    }
+
+    await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
+  } catch {
+    // Ignore error if package.json cannot be read/modified
+  }
+}
+
 export class NoTargetVersionError extends Error {
   constructor(packageName: string, targetVersion: string, originalMessage: string) {
     super(`No matching version "${targetVersion}" found for package "${packageName}": ${originalMessage}`);
@@ -137,6 +178,7 @@ export function isPeerDependencyError(errorMessage: string): boolean {
 /**
  * Executes installation upgrade for a package using the chosen package manager.
  * Updates package.json ONLY for direct dependencies, and lockfile ONLY for transitive dependencies.
+ * For transitive dependencies, injects overrides/resolutions into package.json to force lockfile pinning.
  * Automatically cleans cache and retries with legacy peer deps / force flags if peer dependency conflicts occur.
  */
 export async function installUpgrade(projectDir: string, target: UpgradeTarget, pm: PackageManagerType = "npm"): Promise<void> {
@@ -144,6 +186,12 @@ export async function installUpgrade(projectDir: string, target: UpgradeTarget, 
 
   const config = PACKAGE_MANAGERS[pm] || PACKAGE_MANAGERS.npm;
   const direct = await isDirectDependency(projectDir, target.packageName);
+
+  if (!direct) {
+    // Inject overrides/resolutions into package.json for transitive dependency upgrades
+    await applyTransitiveOverride(projectDir, target.packageName, target.targetVersion, pm);
+  }
+
   const command = direct
     ? config.installDirectCmd(target.packageName, target.targetVersion)
     : config.installTransitiveCmd(target.packageName, target.targetVersion);

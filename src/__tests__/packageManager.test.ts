@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import {
+  applyTransitiveOverride,
   detectPackageManager,
   hasTestSuite,
   isDirectDependency,
@@ -96,5 +97,28 @@ describe("packageManager", () => {
     expect(isPeerDependencyError("Conflicting peer dependency: typescript@7.0.2")).toBe(true);
     expect(isPeerDependencyError("ERR_PNPM_PEER_DEP_ISSUES")).toBe(true);
     expect(isPeerDependencyError("Command failed: node index.js")).toBe(false);
+  });
+
+  it("should inject overrides/resolutions into package.json for transitive dependencies based on PM", async () => {
+    // 1. npm
+    await applyTransitiveOverride(tmpDir, "qs", "6.11.0", "npm");
+    let content = JSON.parse(await fs.readFile(path.join(tmpDir, "package.json"), "utf-8"));
+    expect(content.overrides?.qs).toBe("6.11.0");
+
+    // 2. yarn
+    await applyTransitiveOverride(tmpDir, "qs", "6.11.0", "yarn");
+    content = JSON.parse(await fs.readFile(path.join(tmpDir, "package.json"), "utf-8"));
+    expect(content.resolutions?.qs).toBe("6.11.0");
+
+    // 3. pnpm
+    await applyTransitiveOverride(tmpDir, "qs", "6.11.0", "pnpm");
+    content = JSON.parse(await fs.readFile(path.join(tmpDir, "package.json"), "utf-8"));
+    expect(content.pnpm?.overrides?.qs).toBe("6.11.0");
+
+    // 4. bun
+    await applyTransitiveOverride(tmpDir, "qs", "6.11.0", "bun");
+    content = JSON.parse(await fs.readFile(path.join(tmpDir, "package.json"), "utf-8"));
+    expect(content.overrides?.qs).toBe("6.11.0");
+    expect(content.resolutions?.qs).toBe("6.11.0");
   });
 });
