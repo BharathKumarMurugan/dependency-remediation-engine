@@ -323,7 +323,7 @@ async function main() {
 
   outro("🏁 Pipeline transaction engine loop complete.");
 
-  // Save report asynchronously right after scanning & upgrades complete
+  // Save report asynchronously right after scanning is done without disturbing terminal stdout
   const reportPath = await reportManager.saveReport({
     projectName,
     scanTimestamp: new Date().toISOString(),
@@ -332,9 +332,9 @@ async function main() {
     vulnerableItems,
   });
 
-  // if (reportPath) {
-  //   log.info(`📄 Scan report saved to: ${reportPath}`);
-  // }
+  if (reportPath) {
+    log.info(`📄 Scan report saved to: ${reportPath}`);
+  }
 }
 
 main().catch((err) => {
