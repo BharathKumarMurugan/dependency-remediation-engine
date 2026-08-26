@@ -17,6 +17,106 @@ function readFileAsStream(filePath: string): Promise<string> {
   });
 }
 
+/**
+ * Identifies internal workspace protocol references or non-registry URIs (e.g. workspace:*, file:, link:)
+ */
+export function isInternalOrNonRegistrySpec(version: string): boolean {
+  if (!version) return true;
+  const v = version.trim().toLowerCase();
+  return (
+    v.startsWith("workspace:") ||
+    v.startsWith("file:") ||
+    v.startsWith("link:") ||
+    v.startsWith("portal:") ||
+    v.startsWith("git+") ||
+    v.startsWith("http:") ||
+    v.startsWith("https:") ||
+    v.startsWith("ssh:") ||
+    v === "*" ||
+    v === "latest"
+  );
+}
+
+/**
+ * Recursively resolves workspace package directories based on glob pattern strings (e.g. "packages/*", "apps/*")
+ */
+async function expandWorkspaceGlobs(rootDir: string, patterns: string[]): Promise<string[]> {
+  const packageDirs: string[] = [];
+
+  for (const pattern of patterns) {
+    if (!pattern || pattern.startsWith("!")) continue;
+    const cleanPattern = pattern.replace(/\/+\*+$/, "");
+    const targetParent = path.join(rootDir, cleanPattern);
+
+    try {
+      const entries = await fs.readdir(targetParent, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const subPkgDir = path.join(targetParent, entry.name);
+          const pkgJsonPath = path.join(subPkgDir, "package.json");
+          try {
+            await fs.access(pkgJsonPath);
+            packageDirs.push(subPkgDir);
+          } catch {}
+        }
+      }
+    } catch {
+      try {
+        const pkgJsonPath = path.join(rootDir, pattern, "package.json");
+        await fs.access(pkgJsonPath);
+        packageDirs.push(path.join(rootDir, pattern));
+      } catch {}
+    }
+  }
+
+  return packageDirs;
+}
+
+/**
+ * Discovers sub-package manifest directories for monorepo setups (pnpm, yarn, npm, bun, lerna)
+ */
+export async function discoverWorkspacePackages(rootDir: string): Promise<string[]> {
+  const workspacePatterns: string[] = [];
+
+  // 1. Check pnpm-workspace.yaml
+  try {
+    const pnpmWorkspacePath = path.join(rootDir, "pnpm-workspace.yaml");
+    const content = await readFileAsStream(pnpmWorkspacePath);
+    const matches = content.match(/-\s*['"]?([^'"]+)['"]?/g);
+    if (matches) {
+      for (const m of matches) {
+        const pat = m.replace(/^-\s*['"]?/, "").replace(/['"]?$/, "").trim();
+        if (pat && !pat.startsWith("!")) workspacePatterns.push(pat);
+      }
+    }
+  } catch {}
+
+  // 2. Check lerna.json
+  try {
+    const lernaPath = path.join(rootDir, "lerna.json");
+    const content = await readFileAsStream(lernaPath);
+    const lernaJson = JSON.parse(content);
+    if (Array.isArray(lernaJson.packages)) {
+      workspacePatterns.push(...lernaJson.packages);
+    }
+  } catch {}
+
+  // 3. Check root package.json "workspaces" field
+  try {
+    const pkgJsonPath = path.join(rootDir, "package.json");
+    const content = await readFileAsStream(pkgJsonPath);
+    const pkgJson = JSON.parse(content);
+    if (Array.isArray(pkgJson.workspaces)) {
+      workspacePatterns.push(...pkgJson.workspaces);
+    } else if (pkgJson.workspaces && Array.isArray(pkgJson.workspaces.packages)) {
+      workspacePatterns.push(...pkgJson.workspaces.packages);
+    }
+  } catch {}
+
+  if (workspacePatterns.length === 0) return [];
+  return expandWorkspaceGlobs(rootDir, workspacePatterns);
+}
+
 export async function parsePackageLock(targetPath: string, pm: PackageManagerType = "npm"): Promise<OSVQuery[]> {
   let projectDir = targetPath;
   try {
@@ -32,7 +132,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
   const seen = new Set<string>();
 
   function addQuery(name: string, version: string) {
-    if (!name || !version) return;
+    if (!name || !version || isInternalOrNonRegistrySpec(version)) return;
     const cleanName = name.replace(/^.*node_modules\//, "");
     const cleanVer = version.replace(/^[^\d]*/, "");
     if (!cleanName || !cleanVer) return;
@@ -75,7 +175,6 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
       while ((match = regex.exec(content)) !== null) {
         addQuery(match[1], match[2]);
       }
-      if (queries.length > 0) return queries;
     } catch {}
   }
 
@@ -98,7 +197,6 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
           }
         }
       }
-      if (queries.length > 0) return queries;
     } catch {}
   }
 
@@ -123,7 +221,6 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
           addQuery(match[1], match[2]);
         }
       }
-      if (queries.length > 0) return queries;
     } catch {}
   }
 
@@ -143,10 +240,33 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
     } else if (lockfile.dependencies) {
       parseLegacyDependencies(lockfile.dependencies);
     }
-    if (queries.length > 0) return queries;
   } catch {}
 
-  // 5. Fallback to direct dependencies in package.json
+  // 5. Monorepo Workspace Sub-package Manifest Parsing
+  try {
+    const subPackageDirs = await discoverWorkspacePackages(projectDir);
+    for (const subDir of subPackageDirs) {
+      try {
+        const subPkgJsonPath = path.join(subDir, "package.json");
+        const content = await readFileAsStream(subPkgJsonPath);
+        const pkg = JSON.parse(content);
+        const allDeps = {
+          ...pkg.dependencies,
+          ...pkg.devDependencies,
+          ...pkg.peerDependencies,
+          ...pkg.optionalDependencies,
+        };
+        for (const [name, verSpec] of Object.entries(allDeps)) {
+          if (typeof verSpec === "string" && !isInternalOrNonRegistrySpec(verSpec)) {
+            const cleanVer = verSpec.replace(/[\^~>=<]/g, "");
+            if (name && cleanVer) addQuery(name, cleanVer);
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+
+  // 6. Fallback to direct dependencies in root package.json
   try {
     const pkgJsonPath = path.join(projectDir, "package.json");
     const content = await readFileAsStream(pkgJsonPath);
@@ -154,8 +274,10 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
 
     const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
     for (const [name, verSpec] of Object.entries(allDeps)) {
-      const cleanVer = (verSpec as string).replace(/[\^~>=<]/g, "");
-      if (name && cleanVer) addQuery(name, cleanVer);
+      if (typeof verSpec === "string" && !isInternalOrNonRegistrySpec(verSpec)) {
+        const cleanVer = verSpec.replace(/[\^~>=<]/g, "");
+        if (name && cleanVer) addQuery(name, cleanVer);
+      }
     }
   } catch {}
 

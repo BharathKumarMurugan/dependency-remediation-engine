@@ -1,9 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { parsePackageLock } from "../parser";
+import { parsePackageLock, discoverWorkspacePackages, isInternalOrNonRegistrySpec } from "../parser";
 
-describe("parsePackageLock", () => {
+describe("parsePackageLock & Monorepo Support", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -116,5 +116,71 @@ packages:
       package: { name: "express", ecosystem: "npm" },
       version: "4.17.1",
     });
+  });
+
+  it("should identify internal workspace and file/link protocols correctly", () => {
+    expect(isInternalOrNonRegistrySpec("workspace:*")).toBe(true);
+    expect(isInternalOrNonRegistrySpec("workspace:^1.0.0")).toBe(true);
+    expect(isInternalOrNonRegistrySpec("file:../some-pkg")).toBe(true);
+    expect(isInternalOrNonRegistrySpec("link:./packages/ui")).toBe(true);
+    expect(isInternalOrNonRegistrySpec("portal:./packages/core")).toBe(true);
+    expect(isInternalOrNonRegistrySpec("git+https://github.com/foo/bar.git")).toBe(true);
+    expect(isInternalOrNonRegistrySpec("^4.17.1")).toBe(false);
+    expect(isInternalOrNonRegistrySpec("1.2.3")).toBe(false);
+  });
+
+  it("should discover sub-packages in monorepo workspaces and audit third-party packages while filtering workspace protocols", async () => {
+    // Create root package.json with workspaces
+    await fs.writeFile(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "root-monorepo", workspaces: ["packages/*"] }),
+      "utf-8"
+    );
+
+    // Create sub-package A
+    const subPkgADir = path.join(tmpDir, "packages", "pkg-a");
+    await fs.mkdir(subPkgADir, { recursive: true });
+    await fs.writeFile(
+      path.join(subPkgADir, "package.json"),
+      JSON.stringify({
+        name: "@monorepo/pkg-a",
+        dependencies: {
+          axios: "^0.21.1",
+          "@monorepo/pkg-b": "workspace:*",
+          localpkg: "file:../localpkg",
+        },
+      }),
+      "utf-8"
+    );
+
+    // Create sub-package B
+    const subPkgBDir = path.join(tmpDir, "packages", "pkg-b");
+    await fs.mkdir(subPkgBDir, { recursive: true });
+    await fs.writeFile(
+      path.join(subPkgBDir, "package.json"),
+      JSON.stringify({
+        name: "@monorepo/pkg-b",
+        dependencies: {
+          lodash: "^4.17.21",
+        },
+      }),
+      "utf-8"
+    );
+
+    const discoveredDirs = await discoverWorkspacePackages(tmpDir);
+    expect(discoveredDirs).toHaveLength(2);
+
+    const queries = await parsePackageLock(tmpDir, "npm");
+    expect(queries).toEqual(
+      expect.arrayContaining([
+        { package: { name: "axios", ecosystem: "npm" }, version: "0.21.1" },
+        { package: { name: "lodash", ecosystem: "npm" }, version: "4.17.21" },
+      ])
+    );
+
+    // Internal workspace references should be filtered out
+    const queryNames = queries.map((q) => q.package.name);
+    expect(queryNames).not.toContain("@monorepo/pkg-b");
+    expect(queryNames).not.toContain("localpkg");
   });
 });
