@@ -74,7 +74,7 @@ export async function applyPythonTransitiveConstraint(
         content = await fs.readFile(filePath, "utf-8");
       } catch {}
 
-      const constraintLine = `${packageName}==${targetVersion}`;
+      const constraintLine = `${packageName}>=${targetVersion}`;
       if (!content.includes(packageName)) {
         const updated = content ? `${content.trim()}\n${constraintLine}\n` : `${constraintLine}\n`;
         await fs.writeFile(filePath, updated, "utf-8");
@@ -90,7 +90,7 @@ export async function applyPythonTransitiveConstraint(
 
 /**
  * Executes installation upgrade for a Python package using detected package manager.
- * Warns if no virtual environment is active.
+ * Supports minimum safe version fallback (package>=targetVersion) if exact pin lacks wheels for host Python runtime.
  */
 export async function installPythonUpgrade(
   projectDir: string,
@@ -112,12 +112,19 @@ export async function installPythonUpgrade(
     await applyPythonTransitiveConstraint(projectDir, target.packageName, target.targetVersion);
   }
 
-  const command = config.installCmd(target.packageName, target.targetVersion);
+  const exactCommand = config.installCmd(target.packageName, target.targetVersion);
 
   try {
-    await execAsync(command, { cwd: projectDir });
-  } catch (error: any) {
-    throw new Error(`Python installation failed for ${target.packageName} using ${pmType}: ${error.message}`);
+    await execAsync(exactCommand, { cwd: projectDir });
+  } catch (exactError: any) {
+    // If exact pin (e.g. opencv-python==4.1.1.26 or numpy==1.19) fails due to PyPI wheel version constraints or Python 3.12 distutils removal,
+    // fallback to installing minimum safe version constraint: package>=targetVersion
+    try {
+      const fallbackCmd = pmType === "pip" ? `pip install "${target.packageName}>=${target.targetVersion}"` : exactCommand;
+      await execAsync(fallbackCmd, { cwd: projectDir });
+    } catch {
+      throw new Error(`Python installation failed for ${target.packageName} using ${pmType}: ${exactError.message}`);
+    }
   }
 }
 

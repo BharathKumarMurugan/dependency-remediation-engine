@@ -3,7 +3,23 @@ import type { UserFacingError } from "../../ecosystems/types.ts";
 export function classifyPythonError(errorMessage: string): UserFacingError | null {
   const msg = errorMessage.toLowerCase();
 
-  // 1. Package Not Found / Version Resolution Failed
+  // 1. Python 3.12+ distutils removal & metadata generation build error
+  if (
+    msg.includes("no module named 'distutils'") ||
+    msg.includes("modulenotfounderror: no module named 'distutils") ||
+    msg.includes("metadata-generation-failed") ||
+    msg.includes("preparing metadata (pyproject.toml) did not run successfully")
+  ) {
+    return {
+      userTitle: "🐍 Python 3.12+ Version Incompatibility (Removed 'distutils' Module)",
+      userMessage:
+        "The target package version relies on legacy setup scripts using 'distutils', which was removed in Python 3.12. PyPI has no pre-compiled binary wheel for this exact legacy release on Python 3.12.",
+      recommendation:
+        "Upgrade to a newer version supporting Python 3.12 (e.g. pip install package>=target_version) or use a Python 3.10/3.11 virtual environment.",
+    };
+  }
+
+  // 2. Package Not Found / Version Resolution Failed / No Compatible Wheel
   if (
     msg.includes("no matching distribution found") ||
     msg.includes("could not find a version that satisfies the requirement") ||
@@ -12,13 +28,15 @@ export function classifyPythonError(errorMessage: string): UserFacingError | nul
     msg.includes("could not find a version")
   ) {
     return {
-      userTitle: "❌ Package Version Resolution Failed",
-      userMessage: "The target package version was not found on PyPI or index repositories.",
-      recommendation: "Verify package name spelling or check available releases on https://pypi.org/.",
+      userTitle: "❌ Package Version Resolution Failed / No Compatible Wheel",
+      userMessage:
+        "The target package version has no compatible pre-compiled binary wheel on PyPI for your Python runtime environment.",
+      recommendation:
+        "Verify package name spelling, check available releases on https://pypi.org/, or install using a minimum safe version constraint (e.g. >= target_version).",
     };
   }
 
-  // 2. Permission Denied / System Python Write Attempt
+  // 3. Permission Denied / System Python Write Attempt
   if (
     msg.includes("permissionerror") ||
     msg.includes("permission denied") ||
@@ -32,7 +50,7 @@ export function classifyPythonError(errorMessage: string): UserFacingError | nul
     };
   }
 
-  // 3. C Extension / Native Binary Build Failure
+  // 4. C Extension / Native Binary Build Failure
   if (
     msg.includes("failed building wheel for") ||
     msg.includes("gcc failed") ||
@@ -48,7 +66,7 @@ export function classifyPythonError(errorMessage: string): UserFacingError | nul
     };
   }
 
-  // 4. SSL / Certificate / Network Error
+  // 5. SSL / Certificate / Network Error
   if (
     msg.includes("sslerror") ||
     msg.includes("certificate_verify_failed") ||
