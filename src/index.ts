@@ -3,41 +3,17 @@
 import fs from "fs/promises";
 import path from "path";
 import { intro, outro, log, note, spinner, select, isCancel } from "@clack/prompts";
-import { parsePackageLock } from "./parser.ts";
 import { fetchBatchVulnerabilities } from "./osvClient.ts";
 import { checkPackageDeprecation, evaluateRemediation } from "./evaulator.ts";
-import { getRulesForPackage } from "./codemod/registry.ts";
-import { applyStructuralCodemod } from "./codemod/astGrepRunner.ts";
 import { GitGuard } from "./vcs/gitGuard.ts";
+import { isNoTargetVersionError, NoTargetVersionError } from "./runner/packageManager.ts";
 import { getProjectName, ReportManager } from "./reporter/reportManager.ts";
-import { classifyNpmError } from "./runner/npmErrorClassifier.ts";
-import { checkProductionGuard } from "./runner/envGuard.ts";
 import pLimit from "p-limit";
-import {
-  detectPackageManager,
-  hasTestSuite,
-  installUpgrade,
-  isNoTargetVersionError,
-  NoTargetVersionError,
-  verifyTestSuite,
-} from "./runner/packageManager.ts";
-import type { PackageManagerType } from "./runner/packageManager.ts";
+import { detectEcosystem, getEcosystemAdapter } from "./ecosystems/factory.ts";
+import type { EcosystemType } from "./ecosystems/types.ts";
 
 async function main() {
-  intro("🛡️  Developer Tooling MVP: Vuln Scanner & Remediation Engine");
-
-  // Production Environment Guard & Safety Check
-  const envGuard = checkProductionGuard();
-  if (!envGuard.shouldProceed) {
-    log.error(envGuard.warningMessage!);
-    process.exit(1);
-  }
-
-  if (envGuard.isProduction && envGuard.hasForceFlag) {
-    log.warn(envGuard.warningMessage!);
-  } else {
-    log.info("ℹ️ Verified development environment mode.");
-  }
+  intro("🛡️  Developer Tooling: Vuln Scanner & Local Dependency Remediation Engine");
 
   const targetPath = process.argv[2] || process.cwd();
   let projectRootDir = targetPath;
@@ -51,22 +27,54 @@ async function main() {
     process.exit(1);
   }
 
-  // const projectName = await getProjectName(projectRootDir);
-  // const reportManager = new ReportManager(projectRootDir);
-  // await reportManager.init();
-  // reportManager.startCapturing();
+  // Initialize ReportManager & start log capturing
+  const projectName = await getProjectName(projectRootDir);
+  const reportManager = new ReportManager(projectRootDir);
+  await reportManager.init();
+  reportManager.startCapturing();
 
-  // 1. Detect Package Manager and ask user at the first step
-  const detectedPm = await detectPackageManager(projectRootDir);
+  // 1. Detect or Select Ecosystem (Node.js vs Python)
+  const detectedEco = await detectEcosystem(projectRootDir);
 
-  const chosenPm = await select<PackageManagerType>({
-    message: `Select the Node package manager to use (auto-detected: ${detectedPm}):`,
+  const chosenEco = await select<EcosystemType>({
+    message: `Select the target software ecosystem (auto-detected: ${detectedEco === "python" ? "Python" : "Node.js"}):`,
     options: [
-      { value: "npm", label: "npm", hint: detectedPm === "npm" ? "auto-detected" : undefined },
-      { value: "pnpm", label: "pnpm", hint: detectedPm === "pnpm" ? "auto-detected" : undefined },
-      { value: "yarn", label: "yarn", hint: detectedPm === "yarn" ? "auto-detected" : undefined },
-      { value: "bun", label: "bun", hint: detectedPm === "bun" ? "auto-detected" : undefined },
+      { value: "node", label: "Node.js", hint: detectedEco === "node" ? "auto-detected" : "npm, pnpm, yarn, bun" },
+      { value: "python", label: "Python", hint: detectedEco === "python" ? "auto-detected" : "pip, poetry, uv, pipenv" },
     ],
+    initialValue: detectedEco,
+  });
+
+  if (isCancel(chosenEco)) {
+    outro("Operation cancelled.");
+    process.exit(0);
+  }
+
+  const adapter = getEcosystemAdapter(chosenEco);
+  log.info(`Active ecosystem selected: ${adapter.name}`);
+
+  // 2. Production Environment Guard & Safety Check for selected ecosystem
+  const envGuard = adapter.checkEnvGuard();
+  if (!envGuard.shouldProceed) {
+    log.error(envGuard.warningMessage!);
+    process.exit(1);
+  }
+
+  if (envGuard.isProduction && envGuard.hasForceFlag) {
+    log.warn(envGuard.warningMessage!);
+  } else if (envGuard.warningMessage) {
+    log.warn(envGuard.warningMessage);
+  } else {
+    log.info("ℹ️ Verified development environment mode.");
+  }
+
+  // 3. Detect & Select Package Manager
+  const detectedPm = await adapter.detectPackageManager(projectRootDir);
+  const pmOptions = adapter.getSupportedPackageManagers(detectedPm);
+
+  const chosenPm = await select({
+    message: `Select the package manager to use (auto-detected: ${detectedPm}):`,
+    options: pmOptions,
     initialValue: detectedPm,
   });
 
@@ -80,7 +88,7 @@ async function main() {
   const gitGuard = new GitGuard(projectRootDir);
   const spin = spinner();
 
-  // Safety Gate Check
+  // Safety Gate Check: Clean Git Working Tree
   const isClean = await gitGuard.isWorkingTreeClean();
   if (!isClean) {
     log.error("🚨 Git working directory has uncommitted modifications. Please commit or stash changes before running upgrades.");
@@ -88,7 +96,7 @@ async function main() {
   }
 
   spin.start(`Scanning dependencies using ${chosenPm} lockfile parser and querying OSV.dev API...`);
-  const queries = await parsePackageLock(projectRootDir, chosenPm);
+  const queries = await adapter.parseLockfile(projectRootDir, chosenPm);
   const vulnMap = await fetchBatchVulnerabilities(queries);
 
   const limit = pLimit(20);
@@ -98,7 +106,12 @@ async function main() {
       limit(async () => {
         const key = `${q.package.name}@${q.version}`;
         const vulns = vulnMap[key] || [];
-        const deprecationInfo = await checkPackageDeprecation(q.package.name, q.version, vulns);
+        const deprecationInfo = await checkPackageDeprecation(
+          q.package.name,
+          q.version,
+          vulns,
+          q.package.ecosystem === "PyPI" ? "PyPI" : "npm"
+        );
         return evaluateRemediation(q.package.name, q.version, vulns, deprecationInfo);
       })
     )
@@ -109,10 +122,17 @@ async function main() {
 
   if (vulnerableItems.length === 0) {
     outro("🎉 Your dependencies are secure. No actions needed!");
+    await reportManager.saveReport({
+      projectName,
+      scanTimestamp: new Date().toISOString(),
+      totalDependenciesScanned: queries.length,
+      vulnerablePackagesCount: 0,
+      vulnerableItems: [],
+    });
     return;
   }
 
-  // Display summary table of all vulnerable, deprecated, or private packages found
+  // Display summary table
   const summaryTable = vulnerableItems.map((item) => ({
     "Package Name": item.packageName,
     "Current Version": item.currentVersion,
@@ -120,7 +140,7 @@ async function main() {
     "Upgrade Severity": item.remediation.upgradeType,
     "Breaking Changes": item.remediation.hasBreakingChanges ? "Yes" : "No",
     "Status / Deprecated": item.isPrivate
-      ? "PRIVATE (Not in npm registry)"
+      ? `PRIVATE (Not in ${chosenEco === "python" ? "PyPI" : "npm"} registry)`
       : item.isDeprecated
         ? `DEPRECATED (${item.deprecationReason || "No longer supported"})`
         : "Active",
@@ -133,27 +153,25 @@ async function main() {
   let autoApproveAll = false;
   let autoApproveCodemod = false;
 
-  // Human-in-loop interactive loop
+  // Human-in-loop interactive remediation loop
   for (let i = 0; i < vulnerableItems.length; i++) {
     const pkg = vulnerableItems[i];
     const { packageName, currentVersion, remediation, isDeprecated, deprecationReason, isPrivate } = pkg;
 
-    // Skip installation if package is private / internal (not found in public npm registry)
     if (isPrivate) {
-      log.warn(`⚠️ Package "${packageName}" is a private/internal package (not found in public npm registry). Skipping installation.`);
+      log.warn(`⚠️ Package "${packageName}" is private/internal (not found in registry). Skipping installation.`);
       continue;
     }
 
-    // Handle deprecated package logic: skip ONLY if no target safe version exists
     if (isDeprecated) {
       if (!remediation.targetVersion) {
         log.warn(
-          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}) and has no safe target version available. Skipping installation.`,
+          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}) and has no safe target version. Skipping installation.`
         );
         continue;
       } else {
         log.warn(
-          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}), but safe target version ${remediation.targetVersion} is available. Proceeding with upgrade...`,
+          `⚠️ Package "${packageName}" is DEPRECATED (${deprecationReason || "No longer supported"}), but safe target version ${remediation.targetVersion} is available. Proceeding with upgrade...`
         );
       }
     }
@@ -169,7 +187,7 @@ async function main() {
           `Current Installed Version: ${currentVersion}\n` +
           `Target Safe Version: ${remediation.targetVersion || "N/A"}\n` +
           `Upgrade Path Severity: ${remediation.upgradeType} (Breaking Change: ${remediation.hasBreakingChanges})`,
-        `⚠️ Vulnerability Found [${i + 1}/${vulnerableItems.length}]: ${pkg.vulnerabilities[0]?.id || packageName}`,
+        `⚠️ Vulnerability Found [${i + 1}/${vulnerableItems.length}]: ${pkg.vulnerabilities[0]?.id || packageName}`
       );
 
       const choice = await select({
@@ -184,6 +202,13 @@ async function main() {
 
       if (isCancel(choice) || choice === "no-all") {
         outro("Remediation process cancelled smoothly by user.");
+        await reportManager.saveReport({
+          projectName,
+          scanTimestamp: new Date().toISOString(),
+          totalDependenciesScanned: queries.length,
+          vulnerablePackagesCount: vulnerableItems.length,
+          vulnerableItems,
+        });
         process.exit(0);
       }
 
@@ -201,13 +226,13 @@ async function main() {
       continue;
     }
 
-    // Create per-package snapshot before modifying filesystem for this package
+    // Atomic snapshot before modifying filesystem
     await gitGuard.createSnapshot(packageName);
 
     try {
-      // 1. Checking if codemods are needed for breaking upgrades
+      // 1. AST Structural Refactoring for breaking upgrades
       if (remediation.hasBreakingChanges) {
-        const rules = getRulesForPackage(packageName);
+        const rules = adapter.getRulesForPackage(packageName);
         if (rules) {
           let runCodemod = autoApproveCodemod || autoApproveAll;
           if (!runCodemod) {
@@ -232,8 +257,8 @@ async function main() {
           }
 
           if (runCodemod) {
-            spin.start(`Running ast-grep refactoring on source files...`);
-            const count = await applyStructuralCodemod(projectRootDir, rules);
+            spin.start(`Running AST structural refactoring on source files...`);
+            const count = await adapter.runCodemod(projectRootDir, rules);
             spin.stop(`AST refactoring complete. Modified structural elements in ${count} files.`);
           }
         } else {
@@ -241,28 +266,28 @@ async function main() {
         }
       }
 
-      // 2. Physical package upgrade execution using selected package manager
+      // 2. Physical package upgrade execution
       spin.start(`Installing upgraded dependency via ${chosenPm}: ${packageName}@${remediation.targetVersion}...`);
-      await installUpgrade(
+      await adapter.installUpgrade(
         projectRootDir,
         {
           packageName,
           targetVersion: remediation.targetVersion,
         },
-        chosenPm,
+        chosenPm
       );
       spin.stop(`Package installed successfully via ${chosenPm}.`);
 
-      // 3. Automated Test Verification Gate using selected package manager
-      const testSuiteConfigured = await hasTestSuite(projectRootDir);
+      // 3. Automated Test Verification Gate
+      const testSuiteConfigured = await adapter.hasTestSuite(projectRootDir);
 
       if (!testSuiteConfigured) {
         log.warn(`⚠️ No test suite configured in target repository. Skipping test verification for ${packageName}.`);
         log.success(`✨ Package ${packageName} successfully updated.`);
         await gitGuard.commitSnapshot();
       } else {
-        spin.start(`Executing verification test suite ('${chosenPm} test')...`);
-        const testsPassed = await verifyTestSuite(projectRootDir, chosenPm);
+        spin.start(`Executing verification test suite...`);
+        const testsPassed = await adapter.verifyTestSuite(projectRootDir, chosenPm);
 
         if (testsPassed) {
           spin.stop(`Verification testing passed! Remediations successfully integrated.`);
@@ -278,7 +303,7 @@ async function main() {
       }
     } catch (pipelineError: any) {
       spin.stop(`Step skipped for ${packageName}.`);
-      const knownError = classifyNpmError(pipelineError.message || "");
+      const knownError = adapter.classifyError(pipelineError.message || "");
 
       if (knownError) {
         log.warn(`${knownError.userTitle}\n${knownError.userMessage}`);
@@ -286,7 +311,7 @@ async function main() {
         await gitGuard.rollback();
       } else if (pipelineError instanceof NoTargetVersionError || isNoTargetVersionError(pipelineError.message || "")) {
         log.warn(
-          `⚠️ Skipped upgrade for "${packageName}": Target version ${remediation.targetVersion} was not found on the ${chosenPm} registry (no matching version found).`,
+          `⚠️ Skipped upgrade for "${packageName}": Target version ${remediation.targetVersion} was not found on the registry.`
         );
         await gitGuard.rollback();
       } else {
@@ -298,14 +323,14 @@ async function main() {
 
   outro("🏁 Pipeline transaction engine loop complete.");
 
-  // // Save report asynchronously right after scanning is done without disturbing terminal stdout
-  // const reportPath = await reportManager.saveReport({
-  //   projectName,
-  //   scanTimestamp: new Date().toISOString(),
-  //   totalDependenciesScanned: queries.length,
-  //   vulnerablePackagesCount: vulnerableItems.length,
-  //   vulnerableItems,
-  // });
+  // Save report asynchronously right after scanning & upgrades complete
+  const reportPath = await reportManager.saveReport({
+    projectName,
+    scanTimestamp: new Date().toISOString(),
+    totalDependenciesScanned: queries.length,
+    vulnerablePackagesCount: vulnerableItems.length,
+    vulnerableItems,
+  });
 
   // if (reportPath) {
   //   log.info(`📄 Scan report saved to: ${reportPath}`);
