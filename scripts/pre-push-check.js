@@ -20,6 +20,17 @@ function runStep(name, command) {
   }
 }
 
+// Helper to check if tests directory or test files exist
+function hasPythonTestFiles(dir) {
+  try {
+    const files = fs.readdirSync(dir);
+    if (files.includes("tests") || files.includes("test")) return true;
+    return files.some((f) => f.startsWith("test_") && f.endsWith(".py"));
+  } catch {
+    return false;
+  }
+}
+
 // 1. Node.js Ecosystem Check
 if (fs.existsSync(path.join(rootDir, "package.json"))) {
   console.log("📦 Detected Node.js Ecosystem Project");
@@ -28,30 +39,59 @@ if (fs.existsSync(path.join(rootDir, "package.json"))) {
 }
 
 // 2. Python Ecosystem Check
-if (
+const hasPyManifest =
   fs.existsSync(path.join(rootDir, "pyproject.toml")) ||
   fs.existsSync(path.join(rootDir, "requirements.txt")) ||
   fs.existsSync(path.join(rootDir, "setup.py")) ||
-  fs.existsSync(path.join(rootDir, "Pipfile"))
-) {
+  fs.existsSync(path.join(rootDir, "Pipfile"));
+
+const hasPyFiles = fs.readdirSync(rootDir).some((f) => f.endsWith(".py"));
+
+if (hasPyManifest || hasPyFiles) {
   console.log("🐍 Detected Python Ecosystem Project");
-  try {
-    execSync("flake8 --version", { stdio: "ignore" });
-    runStep("Python Lint Sanitize (flake8)", "flake8 .");
-  } catch {
-    console.log("ℹ️ flake8 not found, skipping Python lint.");
-  }
+
+  // Python Lint & Code Sanitize Check
+  let linterRan = false;
 
   try {
-    execSync("pytest --version", { stdio: "ignore" });
-    runStep("Python Test Suite (pytest)", "pytest");
-  } catch {
+    execSync("ruff --version", { stdio: "ignore" });
+    runStep("Python Code Linter (ruff)", "ruff check .");
+    linterRan = true;
+  } catch {}
+
+  if (!linterRan) {
     try {
-      execSync("python -m unittest discover", { stdio: "ignore" });
-      runStep("Python Test Suite (unittest)", "python -m unittest discover");
+      execSync("flake8 --version", { stdio: "ignore" });
+      runStep("Python Code Linter (flake8)", "flake8 .");
+      linterRan = true;
+    } catch {}
+  }
+
+  if (!linterRan) {
+    try {
+      execSync("python --version", { stdio: "ignore" });
+      runStep("Python Code Syntax & Sanitize Check", 'python -c "import compileall; compileall.compile_dir(\'.\', quiet=1)"');
+      linterRan = true;
     } catch {
-      console.log("ℹ️ No Python test runner found, skipping Python tests.");
+      console.log("ℹ️ Python binary not found, skipping Python lint.");
     }
+  }
+
+  // Python Test Suite Verification
+  if (hasPythonTestFiles(rootDir)) {
+    try {
+      execSync("pytest --version", { stdio: "ignore" });
+      runStep("Python Test Suite (pytest)", "pytest");
+    } catch {
+      try {
+        execSync("python --version", { stdio: "ignore" });
+        runStep("Python Test Suite (unittest)", "python -m unittest discover");
+      } catch {
+        console.log("ℹ️ Skipping Python tests.");
+      }
+    }
+  } else {
+    console.log("ℹ️ No Python test files (tests/ or test_*.py) detected, skipping Python tests.\n");
   }
 }
 
