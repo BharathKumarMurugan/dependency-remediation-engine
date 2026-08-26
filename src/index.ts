@@ -178,11 +178,12 @@ async function main() {
           { value: "yes", label: "Yes", hint: "Upgrade this package" },
           { value: "yes-all", label: "Yes to All", hint: "Automatically upgrade all remaining packages" },
           { value: "no", label: "No", hint: "Skip this package" },
+          { value: "no-all", label: "No to All", hint: "Cancel remaining upgrades and exit process smoothly" },
         ],
       });
 
-      if (isCancel(choice)) {
-        outro("Operation cancelled.");
+      if (isCancel(choice) || choice === "no-all") {
+        outro("Remediation process cancelled smoothly by user.");
         process.exit(0);
       }
 
@@ -216,15 +217,13 @@ async function main() {
                 { value: "yes", label: "Yes", hint: "Run AST refactoring for this package" },
                 { value: "yes-all", label: "Yes to All", hint: "Run AST refactoring for all breaking packages" },
                 { value: "no", label: "No", hint: "Skip AST refactoring" },
+                { value: "no-all", label: "No to All", hint: "Skip AST refactoring for all remaining breaking packages" },
               ],
             });
 
-            if (isCancel(confirmCodemod)) {
-              outro("Operation cancelled.");
-              process.exit(0);
-            }
-
-            if (confirmCodemod === "yes-all") {
+            if (isCancel(confirmCodemod) || confirmCodemod === "no-all") {
+              runCodemod = false;
+            } else if (confirmCodemod === "yes-all") {
               autoApproveCodemod = true;
               runCodemod = true;
             } else if (confirmCodemod === "yes") {
