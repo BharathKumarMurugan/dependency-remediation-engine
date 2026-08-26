@@ -19,12 +19,12 @@ No, dependency update tools are highly prevalent in the modern software engineer
 Existing industry tools include:
 
 - **Dependabot / Renovate Bot:** Automate version bumps but run primarily as cloud-native GitHub/GitLab applications or headless background tasks that lack localized options.
-- **npm audit fix:** Handles dependency tree upgrades directly from the CLI but only remediates simple, non-breaking minor/patch updates. It does not look at your source code to resolve breaking changes.
+- **npm audit fix / pip audit:** Handles dependency tree upgrades directly from the CLI but only remediates simple, non-breaking minor/patch updates. It does not look at your source code to resolve breaking changes.
 
 ### How This Tool is Different
 
 1. **AST-Aware Structural Refactoring:** Unlike standard tools that stop at the lockfile level, this engine embeds Rust-powered `ast-grep` engines to scan your project code and rewrite expressions to match updated library signatures when making major version jumps.
-2. **Local Transaction Isolation:** It operates locally under an atomic transaction boundary using Git snapshots. If an upgrade breaks your local unit tests (`npm test`), the engine rolls back both the dependency configurations and the source code shifts instantly, keeping your working directory completely clean.
+2. **Local Transaction Isolation:** It operates locally under an atomic transaction boundary using Git snapshots. If an upgrade breaks your local unit tests (`npm test` / `pytest`), the engine rolls back both the dependency configurations and the source code shifts instantly, keeping your working directory completely clean.
 3. **Platform Agnostic & Local First:** Rather than tying execution to a specific cloud platform or SaaS layer (e.g., GitHub, GitLab, Bitbucket), it operates completely in the local workspace. The engineer retains full ownership to review the `git diff` before deciding how and where to commit their changes.
 
 ---
@@ -63,7 +63,7 @@ The runtime engine acts as an interactive terminal execution wizard operating ov
 │                                          ▼                 │
 │                            ┌────────────────────────────┐  │
 │                            │  Verification Gate         │  │
-│                            │  (npm test / Rollback Tx)  │  │
+│                            │  (npm test / pytest / Tx)  │  │
 │                            └────────────────────────────┘  │
 └────────────────────────────────────────────────────────────┘
 
@@ -73,10 +73,10 @@ The runtime engine acts as an interactive terminal execution wizard operating ov
 
 ## 🗺️ Product Roadmap & Ecosystem Milestones
 
-The architectural boundaries of the application core are completely pluggable. While the foundational engine is optimized for JavaScript runtimes, the parsing layer can be systematically scaled to support alternative tech stack lockfiles:
+The architectural boundaries of the application core are completely pluggable via the `EcosystemAdapter` pattern. Supported tech stacks:
 
-- [x] **Phase 1: Node.js / npm Ecosystem Core Support (`package-lock.json`)**
-- [ ] **Phase 2: Python / PyPI Ecosystem Support (`poetry.lock` / `requirements.txt`)**
+- [x] **Phase 1: Node.js / npm Ecosystem Core Support (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`)**
+- [x] **Phase 2: Python / PyPI Ecosystem Support (`requirements.txt`, `poetry.lock`, `Pipfile.lock`, `uv.lock`)**
 - [ ] **Phase 3: Go / Go Modules Support (`go.sum`)**
 - [ ] **Phase 4: Java / Maven Ecosystem Support (`pom.xml`)**
 
@@ -87,7 +87,8 @@ The architectural boundaries of the application core are completely pluggable. W
 ### Prerequisites
 
 - Node.js runtime environment (v22+ recommended).
-- Git binary binary commands configured in the local shell.
+- Git binary commands configured in the local shell.
+- For Python scanning: Python environment with `pip`, `poetry`, `uv`, or `pipenv` installed. Activate a virtual environment (`.venv`, `venv`, `env`) before running remediations on Python projects.
 
 ### Installation
 
@@ -96,27 +97,27 @@ Clone the repository and compile the TypeScript dependencies locally:
 ```bash
 npm install
 npm run build
-
 ```
 
 ### Running the Remediation Engine
 
-Execute the engine by targeting a project directory containing a `package-lock.json` file:
+Execute the engine by targeting a Node.js or Python project directory:
 
 ```bash
-# Scan and remediate the current working directory
+# Scan and remediate the current working directory (auto-detects Node.js vs Python)
 npm start
 
-# Target an alternative local software repository path
-npm start /path/to/target/project/package-lock.json
+# Target a Node.js local project
+npm start /path/to/target/node-project
 
+# Target a Python local project containing requirements.txt or poetry.lock
+npm start /path/to/target/python-project
 ```
 
 ### Testing the Engine
 
-Verify the local snapshot operations and SemVer evaluation logic across the core codebase:
+Verify the local snapshot operations, lockfile parsers, and AST refactoring logic across both Node.js and Python test suites:
 
 ```bash
 npm test
-
 ```

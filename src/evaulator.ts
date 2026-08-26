@@ -6,7 +6,7 @@ import type { OSVVulnerability, RemediationReport, VulnerabilitySummary } from "
 
 const CONCURRENCY_LIMIT = 20;
 
-// Optimized HTTP/HTTPS Agents with TCP Keep-Alive connection pooling for npm registry queries
+// Optimized HTTP/HTTPS Agents with TCP Keep-Alive connection pooling for npm/pypi registry queries
 const httpsAgent = new https.Agent({
   keepAlive: true,
   maxSockets: CONCURRENCY_LIMIT,
@@ -69,6 +69,7 @@ export async function checkPackageDeprecation(
   packageName: string,
   currentVersion?: string,
   vulnerabilities: OSVVulnerability[] = [],
+  ecosystem: "npm" | "PyPI" = "npm"
 ): Promise<DeprecationInfo> {
   for (const v of vulnerabilities) {
     if (v.database_specific?.deprecated) {
@@ -93,6 +94,23 @@ export async function checkPackageDeprecation(
         isPrivate: false,
       };
     }
+  }
+
+  if (ecosystem === "PyPI") {
+    try {
+      const url = `https://pypi.org/pypi/${encodeURIComponent(packageName)}/json`;
+      await fetchRegistryWithRetry(() => registryClient.get(url, { timeout: 3000 }));
+      return { isDeprecated: false, isPrivate: false };
+    } catch (err: any) {
+      if (err.response && (err.response.status === 404 || err.response.status === 401 || err.response.status === 403)) {
+        return {
+          isDeprecated: false,
+          isPrivate: true,
+          reason: `Private package (HTTP ${err.response.status}: Not found in public PyPI registry)`,
+        };
+      }
+    }
+    return { isDeprecated: false, isPrivate: false };
   }
 
   try {
