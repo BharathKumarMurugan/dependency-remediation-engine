@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsc",
     "start": "ts-node src/index.ts",
-    "test": "jest"
+    "test": "jest",
+    "prepare": "node scripts/install-hooks.js",
+    "pre-push": "node scripts/pre-push-check.js"
   },
   "keywords": [
     "vulnerability",
