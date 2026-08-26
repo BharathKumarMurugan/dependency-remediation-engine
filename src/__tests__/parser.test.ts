@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { parsePackageLock, discoverWorkspacePackages, isInternalOrNonRegistrySpec } from "../parser";
+import { parsePackageLock, discoverWorkspacePackages, isInternalOrNonRegistrySpec, parseAliasSpecifier } from "../parser";
 
 describe("parsePackageLock & Monorepo Support", () => {
   let tmpDir: string;
@@ -127,6 +127,44 @@ packages:
     expect(isInternalOrNonRegistrySpec("git+https://github.com/foo/bar.git")).toBe(true);
     expect(isInternalOrNonRegistrySpec("^4.17.1")).toBe(false);
     expect(isInternalOrNonRegistrySpec("1.2.3")).toBe(false);
+  });
+
+  it("should parse aliased package specifiers correctly", () => {
+    expect(parseAliasSpecifier("my-express", "npm:express@^4.17.1")).toEqual({
+      name: "express",
+      version: "4.17.1",
+    });
+    expect(parseAliasSpecifier("custom-scoped", "npm:@scope/pkg@1.2.3")).toEqual({
+      name: "@scope/pkg",
+      version: "1.2.3",
+    });
+    expect(parseAliasSpecifier("express", "4.17.1")).toEqual({
+      name: "express",
+      version: "4.17.1",
+    });
+  });
+
+  it("should resolve aliased packages in package.json to their authentic registry package names for OSV querying", async () => {
+    const pkgContent = JSON.stringify({
+      name: "alias-app",
+      dependencies: {
+        "my-express": "npm:express@^4.17.1",
+        "custom-lodash": "npm:lodash@4.17.21",
+      },
+    });
+    await fs.writeFile(path.join(tmpDir, "package.json"), pkgContent, "utf-8");
+
+    const queries = await parsePackageLock(tmpDir, "npm");
+    expect(queries).toEqual(
+      expect.arrayContaining([
+        { package: { name: "express", ecosystem: "npm" }, version: "4.17.1" },
+        { package: { name: "lodash", ecosystem: "npm" }, version: "4.17.21" },
+      ])
+    );
+
+    const names = queries.map((q) => q.package.name);
+    expect(names).not.toContain("my-express");
+    expect(names).not.toContain("custom-lodash");
   });
 
   it("should discover sub-packages in monorepo workspaces and audit third-party packages while filtering workspace protocols", async () => {

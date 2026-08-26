@@ -38,6 +38,27 @@ export function isInternalOrNonRegistrySpec(version: string): boolean {
 }
 
 /**
+ * Resolves aliased package names and versions (e.g. "my-express": "npm:express@^4.17.1" or "npm:@scope/pkg@1.2.3")
+ */
+export function parseAliasSpecifier(rawName: string, rawVersion: string): { name: string; version: string } {
+  let name = rawName.replace(/^.*node_modules\//, "");
+  let version = rawVersion.trim();
+
+  // Handle npm: alias specifiers e.g. "npm:express@^4.17.1" or "npm:@scope/pkg@1.2.3"
+  if (version.startsWith("npm:")) {
+    const aliasTarget = version.slice(4);
+    const match = aliasTarget.match(/^(@?[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)?)@(.+)$/);
+    if (match) {
+      name = match[1];
+      version = match[2];
+    }
+  }
+
+  const cleanVer = version.replace(/^[^\d]*/, "");
+  return { name, version: cleanVer };
+}
+
+/**
  * Recursively resolves workspace package directories based on glob pattern strings (e.g. "packages/*", "apps/*")
  */
 async function expandWorkspaceGlobs(rootDir: string, patterns: string[]): Promise<string[]> {
@@ -133,15 +154,14 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
 
   function addQuery(name: string, version: string) {
     if (!name || !version || isInternalOrNonRegistrySpec(version)) return;
-    const cleanName = name.replace(/^.*node_modules\//, "");
-    const cleanVer = version.replace(/^[^\d]*/, "");
-    if (!cleanName || !cleanVer) return;
+    const { name: realName, version: cleanVer } = parseAliasSpecifier(name, version);
+    if (!realName || !cleanVer) return;
 
-    const key = `${cleanName}@${cleanVer}`;
+    const key = `${realName}@${cleanVer}`;
     if (!seen.has(key)) {
       seen.add(key);
       queries.push({
-        package: { name: cleanName, ecosystem: "npm" },
+        package: { name: realName, ecosystem: "npm" },
         version: cleanVer,
       });
     }
@@ -210,8 +230,8 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
         if (parsed.packages) {
           for (const [pkgPath, pkgData] of Object.entries(parsed.packages)) {
             const version = (pkgData as { version?: string })?.version;
-            const name = pkgPath.replace(/^.*node_modules\//, "");
-            if (name && version) addQuery(name, version);
+            const rawName = (pkgData as { name?: string })?.name || pkgPath.replace(/^.*node_modules\//, "");
+            if (rawName && version) addQuery(rawName, version);
           }
         }
       } catch {
@@ -233,9 +253,9 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
     if (lockfile.packages) {
       for (const [pkgPath, pkgData] of Object.entries(lockfile.packages)) {
         if (pkgPath === "" || (pkgData as { link?: boolean }).link) continue;
-        const packageName = pkgPath.replace(/^.*node_modules\//, "");
+        const rawName = (pkgData as { name?: string }).name || pkgPath.replace(/^.*node_modules\//, "");
         const version = (pkgData as { version?: string }).version;
-        if (packageName && version) addQuery(packageName, version);
+        if (rawName && version) addQuery(rawName, version);
       }
     } else if (lockfile.dependencies) {
       parseLegacyDependencies(lockfile.dependencies);
@@ -258,8 +278,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
         };
         for (const [name, verSpec] of Object.entries(allDeps)) {
           if (typeof verSpec === "string" && !isInternalOrNonRegistrySpec(verSpec)) {
-            const cleanVer = verSpec.replace(/[\^~>=<]/g, "");
-            if (name && cleanVer) addQuery(name, cleanVer);
+            addQuery(name, verSpec);
           }
         }
       } catch {}
@@ -275,8 +294,7 @@ export async function parsePackageLock(targetPath: string, pm: PackageManagerTyp
     const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
     for (const [name, verSpec] of Object.entries(allDeps)) {
       if (typeof verSpec === "string" && !isInternalOrNonRegistrySpec(verSpec)) {
-        const cleanVer = verSpec.replace(/[\^~>=<]/g, "");
-        if (name && cleanVer) addQuery(name, cleanVer);
+        addQuery(name, verSpec);
       }
     }
   } catch {}
