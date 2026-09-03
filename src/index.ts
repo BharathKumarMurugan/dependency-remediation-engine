@@ -333,7 +333,12 @@ async function main() {
   });
 
   if (reportPath) {
-    log.info(`📄 Scan report saved to: ${reportPath}`);
+    if(reportPath.logFilePath) {
+      log.info(`📄 Scan log report is saved to: ${reportPath.logFilePath}`);
+    }
+    if(reportPath.htmlFilePath) {
+      log.info(`📄 HTML summary report is saved to: ${reportPath.htmlFilePath}`);
+    }
   }
 }
 

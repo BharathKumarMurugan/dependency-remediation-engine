@@ -3,6 +3,7 @@ import { createWriteStream } from "fs";
 import path from "path";
 import { stripVTControlCharacters } from "util";
 import { filePathMutex } from "../vcs/filePathMutex.ts";
+import { generateHtmlReport } from "./htmlReportGenerator.ts";
 
 export async function getProjectName(projectRootDir: string): Promise<string> {
   try {
@@ -39,6 +40,7 @@ export class ReportManager {
   private targetRootDir: string;
   private projectReportDir: string = "";
   private logFilePath: string = "";
+  private htmlFilePath: string = "";
   private originalStdoutWrite?: typeof process.stdout.write;
   private originalConsoleLog?: typeof console.log;
   private logBuffer: string[] = [];
@@ -57,6 +59,7 @@ export class ReportManager {
       await fs.mkdir(this.projectReportDir, { recursive: true });
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       this.logFilePath = path.join(this.projectReportDir, `scan_report_${timestamp}.log`);
+      this.htmlFilePath = path.join(this.projectReportDir, `scan_report.html`);
     } catch {
       // Graceful fallback
     }
@@ -88,10 +91,10 @@ export class ReportManager {
   }
 
   /**
-   * Streams captured console logs and JSON summary to disk after scanning completes,
+   * Streams captured console logs, JSON summary, and interactive HTML report to disk after scanning completes,
    * then clears memory buffer immediately.
    */
-  async saveReport(scanSummaryData?: any): Promise<string | null> {
+  async saveReport(scanSummaryData?: any): Promise<any | null> {
     try {
       if (this.isCapturing) {
         if (this.originalStdoutWrite) process.stdout.write = this.originalStdoutWrite;
@@ -101,8 +104,8 @@ export class ReportManager {
 
       await fs.mkdir(this.projectReportDir, { recursive: true });
 
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       if (!this.logFilePath) {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
         this.logFilePath = path.join(this.projectReportDir, `scan_report_${timestamp}.log`);
       }
 
@@ -111,12 +114,24 @@ export class ReportManager {
       this.logBuffer = []; // Clear buffer memory immediately for Garbage Collection
 
       if (scanSummaryData) {
+        // 1. Write scan_summary.json
         const jsonPath = path.join(this.projectReportDir, "scan_summary.json");
         const jsonContent = JSON.stringify(scanSummaryData, null, 2);
         await writeChunksToStream(jsonPath, [jsonContent]);
+
+        // 2. Generate and write interactive HTML reports (timestamped and scan_report.html)
+        const htmlContent = generateHtmlReport(scanSummaryData);
+        const timestampedHtmlPath = path.join(this.projectReportDir, `scan_report_${timestamp}.html`);
+        this.htmlFilePath = path.join(this.projectReportDir, "scan_report.html");
+
+        await writeChunksToStream(timestampedHtmlPath, [htmlContent]);
+        await writeChunksToStream(this.htmlFilePath, [htmlContent]);
       }
 
-      return this.logFilePath;
+      return {
+        logFilePath: this.logFilePath,
+        htmlFilePath: this.htmlFilePath,
+      };
     } catch {
       return null;
     }
